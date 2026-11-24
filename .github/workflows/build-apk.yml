@@ -1,103 +1,71 @@
-name: Build Debug APK
+name: build-debug-apk
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
-  build-debug-apk:
+  build:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Temurin Java 17
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: 17
 
-      - name: Verify Java environment
-        shell: bash
-        run: |
-          java -version
-          echo "JAVA_HOME=${JAVA_HOME:-}"
-          JAVA_VERSION_RAW=$(java -version 2>&1 | awk -F '"' '/version/ {print $2; exit}')
-          if [ -z "$JAVA_VERSION_RAW" ]; then
-            echo "ERROR: Unable to determine active Java version." >&2
-            exit 1
-          fi
-          JAVA_MAJOR="${JAVA_VERSION_RAW%%.*}"
-          if [ "$JAVA_MAJOR" = "1" ]; then
-            JAVA_MAJOR=$(echo "$JAVA_VERSION_RAW" | cut -d. -f2)
-          fi
-          echo "Detected Java major version: $JAVA_MAJOR"
-          if [ "$JAVA_MAJOR" -lt 17 ]; then
-            echo "ERROR: Java 17 or newer is required, but detected Java $JAVA_MAJOR ($JAVA_VERSION_RAW)." >&2
-            exit 1
-          fi
-
-      - name: Set up Gradle 9.3.1
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '9.3.1'
-          cache-disabled: true
 
-      - name: Create temporary debug keystore
-        shell: bash
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Build web app
+        run: npm run build
+
+      - name: Add Android platform if missing
         run: |
-          if [ -f ./debug.keystore ]; then
-            echo "Temporary debug keystore already exists."
-          else
-            KEYTOOL_BIN="${JAVA_HOME:+$JAVA_HOME/bin/}keytool"
-            if ! command -v "$KEYTOOL_BIN" >/dev/null 2>&1; then
-              echo "ERROR: keytool from Java 17 not found." >&2
-              exit 1
-            fi
-            if ! "$KEYTOOL_BIN" -genkeypair -v \
-              -keystore ./debug.keystore \
-              -storepass android \
-              -alias androiddebugkey \
-              -keypass android \
-              -dname "CN=Android Debug,O=Android,C=US" \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 >/dev/null 2>&1; then
-              echo "ERROR: Failed to generate temporary ./debug.keystore." >&2
-              exit 1
-            fi
+          if [ ! -d "android" ]; then
+            npx cap add android
           fi
-          if [ ! -f ./debug.keystore ]; then
-            echo "ERROR: ./debug.keystore does not exist after generation." >&2
-            exit 1
-          fi
-          echo "Confirmed ./debug.keystore is ready for build."
+
+      - name: Sync Capacitor
+        run: npx cap sync android
 
       - name: Build Debug APK
-        run: gradle :app:assembleDebug --stacktrace --no-daemon
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --stacktrace --no-daemon
 
       - name: Verify Debug APK output
-        shell: bash
         run: |
-          EXPECTED_APK="app/build/outputs/apk/debug/app-debug.apk"
-          if [ ! -f "$EXPECTED_APK" ]; then
-            echo "ERROR: Expected debug APK not found at $EXPECTED_APK" >&2
-            if [ -d "app/build/outputs/apk" ]; then
-              echo "Discovered APK files under app/build/outputs/apk:"
-              find app/build/outputs/apk -type f -name "*.apk" -print || true
-            else
-              echo "Directory app/build/outputs/apk does not exist." >&2
-            fi
-            exit 1
-          fi
-          echo "Verified debug APK at $EXPECTED_APK"
+          ls -la android/app/build/outputs/apk/debug/
+          test -f android/app/build/outputs/apk/debug/app-debug.apk
 
       - name: Upload Debug APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
+          name: Nabd-TV-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: Nabd TV v${{ github.run_number }}
+          files: android/app/build/outputs/apk/debug/app-debug.apk
