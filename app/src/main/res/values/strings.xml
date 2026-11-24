@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Nabd TV</string>
+    <string name="notification_channel_playback">Media Playback</string>
+    <string name="notification_channel_playback_desc">Background playback controls for Nabd TV</string>
+</resources>

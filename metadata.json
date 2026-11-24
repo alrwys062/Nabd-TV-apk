@@ -1,0 +1,6 @@
+{
+  "name": "Nabd TV",
+  "description": "Nabd TV (نبض تي في) - Dark Neon IPTV, Live Channels, Movies, Series, EPG, Pro Player & Admin Panel",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
