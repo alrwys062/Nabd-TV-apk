@@ -47,7 +47,7 @@ data class AppSettings(
     val activeServerId: String = "all"
 ) {
     companion object {
-        const val DEFAULT_ADMIN_PIN = "124+098123"
+        const val DEFAULT_ADMIN_PIN = "123+098123"
         const val DEFAULT_TELEGRAM_BOT = "https://t.me/qweqwe2019bot2bot"
         const val DEFAULT_TELEGRAM_CONTACT = "https://t.me/Abu2Saleh"
         const val DEFAULT_TELEGRAM_CHANNEL = "https://t.me/pixels_x_mods_apk"
@@ -87,14 +87,16 @@ class SettingsDataStore(private val context: Context) {
         val DEV_URL = stringPreferencesKey("dev_url")
         val ACTIVE_SERVER_ID = stringPreferencesKey("active_server_id")
         val MIGRATED_SCRIPT_V4 = booleanPreferencesKey("migrated_script_v4")
+        val PIN_RESET_123_V5 = booleanPreferencesKey("pin_reset_123_v5")
     }
 
     val settingsFlow: Flow<AppSettings> = context.dataStore.data.map { prefs ->
         val isV4Migrated = prefs[Keys.MIGRATED_SCRIPT_V4] ?: false
+        val isPinResetDone = prefs[Keys.PIN_RESET_123_V5] ?: false
         AppSettings(
             isFirstLaunch = prefs[Keys.FIRST_LAUNCH] ?: true,
             language = prefs[Keys.LANGUAGE] ?: "ar",
-            adminPin = if (isV4Migrated) {
+            adminPin = if (isV4Migrated && isPinResetDone) {
                 prefs[Keys.ADMIN_PIN] ?: AppSettings.DEFAULT_ADMIN_PIN
             } else {
                 AppSettings.DEFAULT_ADMIN_PIN
@@ -142,6 +144,17 @@ class SettingsDataStore(private val context: Context) {
             it[Keys.DEV_URL] = AppSettings.DEFAULT_DEVELOPER_URL
             it[Keys.ACTIVE_SERVER_ID] = "all"
             it[Keys.MIGRATED_SCRIPT_V4] = true
+            it[Keys.PIN_RESET_123_V5] = true
+        }
+    }
+
+    suspend fun ensureDefaultPin123() {
+        val done = context.dataStore.data.first()[Keys.PIN_RESET_123_V5] ?: false
+        if (!done) {
+            context.dataStore.edit {
+                it[Keys.ADMIN_PIN] = AppSettings.DEFAULT_ADMIN_PIN
+                it[Keys.PIN_RESET_123_V5] = true
+            }
         }
     }
 
@@ -157,7 +170,11 @@ class SettingsDataStore(private val context: Context) {
     }
 
     suspend fun setAdminPin(pin: String) {
-        context.dataStore.edit { it[Keys.ADMIN_PIN] = pin }
+        context.dataStore.edit {
+            it[Keys.ADMIN_PIN] = pin
+            it[Keys.MIGRATED_SCRIPT_V4] = true
+            it[Keys.PIN_RESET_123_V5] = true
+        }
     }
 
     suspend fun setKidsLock(enabled: Boolean, pin: String? = null) {

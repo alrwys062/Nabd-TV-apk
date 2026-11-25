@@ -142,6 +142,7 @@ class NabdRepository(
             dao.insertServers(defaultScriptServers())
             settingsStore.markScriptMigratedAndResetDefaults()
         } else {
+            settingsStore.ensureDefaultPin123()
             val existing = dao.getAllServersOnce()
             if (existing.isEmpty()) {
                 dao.insertServers(defaultScriptServers())
