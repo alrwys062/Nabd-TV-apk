@@ -86,9 +86,23 @@ class PlayerViewModel(
                 "CHANNEL" -> {
                     val ch = repository.getChannelById(contentId) ?: return@launch
                     val backups = parseBackupSources(ch.backupUrlsJson)
-                    val sources = listOf(
+                    val failoverChannels = repository.findFailoverChannelsFor(ch)
+                    val crossServerSources = failoverChannels.flatMap { alt ->
+                        val altBackups = parseBackupSources(alt.backupUrlsJson)
+                        listOf(
+                            PlayableSource(
+                                label = "${alt.name} (Backup Auto)",
+                                url = alt.streamUrl,
+                                userAgent = alt.userAgent,
+                                quality = "Auto"
+                            )
+                        ) + altBackups.take(1).map { b ->
+                            b.copy(label = "${alt.name} (Backup TS)")
+                        }
+                    }
+                    val sources = (listOf(
                         PlayableSource("Server 1 - Auto", ch.streamUrl, ch.userAgent, "Auto")
-                    ) + backups
+                    ) + backups + crossServerSources).distinctBy { it.url }
                     val (currProg, nextProg) = repository.getCurrentAndNextProgram(ch.tvgId)
                     _mediaState.value = ActiveMediaUiState(
                         contentType = ContentType.CHANNEL,

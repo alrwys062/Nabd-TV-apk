@@ -59,6 +59,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.local.AppSettings
+import com.example.ui.components.DeveloperRightsCard
 import com.example.ui.components.NabdLogoIcon
 import com.example.ui.components.TelegramFollowSection
 import com.example.ui.theme.CyanVioletBrush
@@ -240,6 +241,13 @@ fun WelcomeLanguageScreen(
                 botUrl = settings.telegramBotUrl,
                 contactUrl = settings.telegramContactUrl,
                 channelUrl = settings.telegramChannelUrl
+            )
+
+            Spacer(Modifier.height(14.dp))
+
+            DeveloperRightsCard(
+                developerName = settings.developerName,
+                developerUrl = settings.developerUrl
             )
         }
     }

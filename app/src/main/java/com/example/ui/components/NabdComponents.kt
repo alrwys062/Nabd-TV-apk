@@ -727,6 +727,74 @@ fun TelegramFollowSection(
 }
 
 @Composable
+fun DeveloperRightsCard(
+    developerName: String,
+    developerUrl: String,
+    modifier: Modifier = Modifier
+) {
+    val strings = LocalAppStrings.current
+    val context = LocalContext.current
+    val cleanHandle = "@${developerName.removePrefix("@")}"
+
+    Surface(
+        color = NabdSurfaceElevated,
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(1.dp, NabdCyan.copy(alpha = 0.45f)),
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable { openExternalUrl(context, developerUrl) }
+            .testTag("developer_rights_card")
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(42.dp)
+                    .clip(CircleShape)
+                    .background(CyanVioletBrush),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.Send,
+                    contentDescription = cleanHandle,
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "© 2026 ${strings.developerRightsLabel}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = NabdTextSecondary
+                )
+                Text(
+                    text = "$cleanHandle • $developerUrl",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = NabdCyan,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Surface(
+                color = NabdCyan.copy(alpha = 0.16f),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text(
+                    text = strings.developerRightsAction,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = NabdCyan,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun TelegramLinkButton(
     label: String,
     url: String,
@@ -870,7 +938,7 @@ fun PinEntryDialog(
                 OutlinedTextField(
                     value = pin,
                     onValueChange = {
-                        if (it.length <= 8) {
+                        if (it.length <= 32) {
                             pin = it
                             error = false
                         }
@@ -878,7 +946,7 @@ fun PinEntryDialog(
                     label = { Text(strings.enterPin) },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     isError = error,
                     modifier = Modifier
                         .fillMaxWidth()

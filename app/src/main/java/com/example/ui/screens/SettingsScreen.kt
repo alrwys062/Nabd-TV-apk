@@ -64,6 +64,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.example.data.local.AppSettings
+import com.example.ui.components.DeveloperRightsCard
 import com.example.ui.components.PinEntryDialog
 import com.example.ui.components.TelegramFollowSection
 import com.example.ui.theme.LocalAppStrings
@@ -274,7 +275,7 @@ fun SettingsScreen(
                 SettingsActionCard(
                     icon = Icons.Default.Refresh,
                     title = strings.refreshPlaylist,
-                    subtitle = settings.primaryM3uUrl,
+                    subtitle = strings.sourcesSectionTitle,
                     onClick = {
                         onRefreshNow()
                         Toast.makeText(context, strings.refreshing, Toast.LENGTH_SHORT).show()
@@ -292,13 +293,18 @@ fun SettingsScreen(
             }
         }
 
-        // Telegram "Follow Us" Section
+        // Telegram "Follow Us" Section & Developer Rights
         item {
             Spacer(Modifier.height(6.dp))
             TelegramFollowSection(
                 botUrl = settings.telegramBotUrl,
                 contactUrl = settings.telegramContactUrl,
                 channelUrl = settings.telegramChannelUrl
+            )
+            Spacer(Modifier.height(12.dp))
+            DeveloperRightsCard(
+                developerName = settings.developerName,
+                developerUrl = settings.developerUrl
             )
         }
 
@@ -376,11 +382,11 @@ fun SettingsScreen(
             text = {
                 OutlinedTextField(
                     value = newPin,
-                    onValueChange = { if (it.length <= 8) newPin = it },
+                    onValueChange = { if (it.length <= 32) newPin = it },
                     label = { Text(strings.enterPin) },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword)
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
                 )
             },
             confirmButton = {

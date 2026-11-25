@@ -23,7 +23,7 @@ class ChannelHealthChecker(baseClient: OkHttpClient) {
 
     suspend fun checkStream(url: String, userAgent: String = ""): StreamHealthStatus =
         withContext(Dispatchers.IO) {
-            val ua = userAgent.ifBlank { "NabdTV/1.0 (Android)" }
+            val ua = userAgent.ifBlank { "IPTVSmartersPlayer" }
             val headReq = Request.Builder()
                 .url(url)
                 .header("User-Agent", ua)

@@ -58,13 +58,17 @@ import com.example.data.model.ChannelEntity
 import com.example.data.model.ContentType
 import com.example.data.model.MovieEntity
 import com.example.data.model.SeriesEntity
+import com.example.data.model.ServerSourceEntity
 import com.example.data.model.WatchHistoryEntity
 import com.example.ui.components.CategoryChipRow
+import com.example.ui.components.CategoryPill
 import com.example.ui.components.ChannelCard
+import com.example.ui.components.DeveloperRightsCard
 import com.example.ui.components.EmptyStateView
 import com.example.ui.components.FeaturedBannerCard
 import com.example.ui.components.NabdLogoIcon
 import com.example.ui.components.SectionHeader
+import com.example.ui.components.TelegramFollowSection
 import com.example.ui.components.VodPosterCard
 import com.example.ui.theme.LocalAppStrings
 import com.example.ui.theme.NabdBg
@@ -82,6 +86,7 @@ fun HomeScreen(
     settings: AppSettings,
     isOnline: Boolean,
     isSyncing: Boolean,
+    syncMessage: String? = null,
     categories: List<String>,
     selectedCategory: String,
     featuredChannels: List<ChannelEntity>,
@@ -90,6 +95,8 @@ fun HomeScreen(
     movies: List<MovieEntity>,
     series: List<SeriesEntity>,
     watchHistory: List<WatchHistoryEntity>,
+    servers: List<ServerSourceEntity> = emptyList(),
+    onSelectServer: (String) -> Unit = {},
     onSelectCategory: (String) -> Unit,
     onSearchClick: () -> Unit,
     onRefreshClick: () -> Unit,
@@ -258,7 +265,7 @@ fun HomeScreen(
             }
         }
 
-        // Sync progress bar when fetching iptv-org
+        // Sync progress bar when refreshing active servers
         if (isSyncing) {
             item {
                 Column(
@@ -279,6 +286,32 @@ fun HomeScreen(
                         color = NabdCyan,
                         trackColor = NabdSurfaceElevated
                     )
+                }
+            }
+        } else if (!syncMessage.isNullOrBlank()) {
+            item {
+                Surface(
+                    color = NabdPink.copy(alpha = 0.14f),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, NabdPink.copy(alpha = 0.45f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .clickable(onClick = onRefreshClick)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = strings.retry, tint = NabdPink)
+                        Text(
+                            text = syncMessage,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.White,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                 }
             }
         }
@@ -310,6 +343,34 @@ fun HomeScreen(
                         isLive = true,
                         onWatchClick = onRefreshClick
                     )
+                }
+            }
+        }
+
+        // Server Source Switcher
+        val enabledServers = servers.filter { it.isEnabled }
+        if (enabledServers.size > 1) {
+            item {
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    item {
+                        CategoryPill(
+                            label = strings.allServersLabel,
+                            selected = settings.activeServerId == "all",
+                            onClick = { onSelectServer("all") },
+                            testTag = "server_chip_all"
+                        )
+                    }
+                    items(enabledServers, key = { it.id }) { srv ->
+                        CategoryPill(
+                            label = srv.name,
+                            selected = settings.activeServerId == srv.id,
+                            onClick = { onSelectServer(srv.id) },
+                            testTag = "server_chip_${srv.id}"
+                        )
+                    }
                 }
             }
         }
@@ -509,6 +570,26 @@ fun HomeScreen(
                         )
                     }
                 }
+            }
+        }
+
+        // Telegram Subscription Channels & Developer Rights
+        item {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                TelegramFollowSection(
+                    botUrl = settings.telegramBotUrl,
+                    contactUrl = settings.telegramContactUrl,
+                    channelUrl = settings.telegramChannelUrl
+                )
+                DeveloperRightsCard(
+                    developerName = settings.developerName,
+                    developerUrl = settings.developerUrl
+                )
             }
         }
     }

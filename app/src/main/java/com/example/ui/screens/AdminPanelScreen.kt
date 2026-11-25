@@ -136,7 +136,6 @@ fun AdminPanelScreen(
             ) {
                 Icon(Icons.Default.Lock, contentDescription = null, tint = NabdCyan, modifier = Modifier.size(56.dp))
                 Text(strings.controlPanel, style = MaterialTheme.typography.headlineMedium, color = Color.White)
-                Text("Default PIN: 1234", style = MaterialTheme.typography.bodySmall, color = NabdTextSecondary)
                 PinEntryDialog(
                     title = strings.controlPanel,
                     expectedPin = settings.adminPin,
@@ -293,7 +292,8 @@ fun AdminPanelScreen(
                 onToggleEnabled = { viewModel.toggleServerEnabled(it) },
                 onMoveOrder = { s, d -> viewModel.moveServerOrder(s, d) },
                 onTestAndSync = { viewModel.testAndSyncServer(it) },
-                onDelete = { viewModel.deleteServer(it.id) }
+                onDelete = { viewModel.deleteServer(it.id) },
+                onResetServers = { viewModel.resetServersToDefault() }
             )
         }
         AdminSheet.CHANNELS -> {
@@ -403,6 +403,8 @@ fun AdminPanelScreen(
             var bot by remember(settings) { mutableStateOf(settings.telegramBotUrl) }
             var contact by remember(settings) { mutableStateOf(settings.telegramContactUrl) }
             var channel by remember(settings) { mutableStateOf(settings.telegramChannelUrl) }
+            var devName by remember(settings) { mutableStateOf(settings.developerName) }
+            var devUrl by remember(settings) { mutableStateOf(settings.developerUrl) }
             var announcement by remember(settings) { mutableStateOf(settings.announcementText) }
             var epg by remember(settings) { mutableStateOf(settings.epgUrl) }
 
@@ -416,8 +418,10 @@ fun AdminPanelScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         OutlinedTextField(value = bot, onValueChange = { bot = it }, label = { Text("Bot URL") }, singleLine = true)
-                        OutlinedTextField(value = contact, onValueChange = { contact = it }, label = { Text("Contact URL") }, singleLine = true)
-                        OutlinedTextField(value = channel, onValueChange = { channel = it }, label = { Text("Channel URL") }, singleLine = true)
+                        OutlinedTextField(value = contact, onValueChange = { contact = it }, label = { Text("Contact / Channel URL 2") }, singleLine = true)
+                        OutlinedTextField(value = channel, onValueChange = { channel = it }, label = { Text("Channel URL 3") }, singleLine = true)
+                        OutlinedTextField(value = devName, onValueChange = { devName = it }, label = { Text("Developer Handle") }, singleLine = true)
+                        OutlinedTextField(value = devUrl, onValueChange = { devUrl = it }, label = { Text("Developer Link") }, singleLine = true)
                         OutlinedTextField(value = announcement, onValueChange = { announcement = it }, label = { Text("In-App Announcement") })
                         OutlinedTextField(value = epg, onValueChange = { epg = it }, label = { Text("XMLTV EPG URL") }, singleLine = true)
                     }
@@ -425,7 +429,7 @@ fun AdminPanelScreen(
                 confirmButton = {
                     Button(
                         onClick = {
-                            viewModel.saveTelegramAndAnnouncement(bot, contact, channel, announcement, epg)
+                            viewModel.saveTelegramAndAnnouncement(bot, contact, channel, announcement, epg, devName, devUrl)
                             activeSheet = AdminSheet.NONE
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = NabdViolet)
@@ -574,7 +578,8 @@ private fun ServersManagerDialog(
     onToggleEnabled: (ServerSourceEntity) -> Unit,
     onMoveOrder: (ServerSourceEntity, Int) -> Unit,
     onTestAndSync: (ServerSourceEntity) -> Unit,
-    onDelete: (ServerSourceEntity) -> Unit
+    onDelete: (ServerSourceEntity) -> Unit,
+    onResetServers: () -> Unit
 ) {
     val strings = LocalAppStrings.current
     var name by remember { mutableStateOf("") }
@@ -607,9 +612,7 @@ private fun ServersManagerDialog(
                                 IconButton(onClick = { onMoveOrder(srv, -1) }) { Icon(Icons.Default.ArrowUpward, null, tint = NabdCyan) }
                                 IconButton(onClick = { onMoveOrder(srv, 1) }) { Icon(Icons.Default.ArrowDownward, null, tint = NabdCyan) }
                                 IconButton(onClick = { onTestAndSync(srv) }) { Icon(Icons.Default.Sync, strings.testConnection, tint = NabdEmerald) }
-                                if (srv.id != "default_iptv_org") {
-                                    IconButton(onClick = { onDelete(srv) }) { Icon(Icons.Default.Delete, strings.delete, tint = NabdRed) }
-                                }
+                                IconButton(onClick = { onDelete(srv) }) { Icon(Icons.Default.Delete, strings.delete, tint = NabdRed) }
                             }
                         }
                     }
@@ -642,6 +645,13 @@ private fun ServersManagerDialog(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(strings.addServer, color = Color.White)
+                }
+                OutlinedButton(
+                    onClick = onResetServers,
+                    border = BorderStroke(1.dp, NabdCyan),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("إعادة ضبط السيرفرات (1 + 2 + 3)", color = NabdCyan)
                 }
             }
         },

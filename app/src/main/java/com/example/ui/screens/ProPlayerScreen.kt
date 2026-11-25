@@ -463,22 +463,46 @@ fun ProPlayerScreen(
             }
 
             if (errorMsg != null) {
+                val displayError = when (errorMsg) {
+                    "HTTP_401", "HTTP_403" -> strings.playbackUnauthorizedError
+                    "HTTP_503", "HTTP_404" -> strings.playbackUnavailableError
+                    else -> strings.playbackError
+                }
                 Column(
                     modifier = Modifier
                         .align(Alignment.Center)
-                        .background(Color.Black.copy(alpha = 0.75f), RoundedCornerShape(20.dp))
+                        .padding(horizontal = 24.dp)
+                        .background(Color.Black.copy(alpha = 0.82f), RoundedCornerShape(20.dp))
                         .padding(18.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text(strings.playbackError, color = Color.White, style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        text = displayError,
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleSmall,
+                        textAlign = TextAlign.Center
+                    )
                     Spacer(Modifier.height(10.dp))
-                    Button(
-                        onClick = { viewModel.playerManager.retryCurrent() },
-                        colors = ButtonDefaults.buttonColors(containerColor = NabdViolet)
-                    ) {
-                        Icon(Icons.Default.Refresh, contentDescription = null, tint = Color.White)
-                        Spacer(Modifier.width(6.dp))
-                        Text(strings.retry, color = Color.White)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { viewModel.playerManager.retryCurrent() },
+                            colors = ButtonDefaults.buttonColors(containerColor = NabdViolet)
+                        ) {
+                            Icon(Icons.Default.Refresh, contentDescription = null, tint = Color.White)
+                            Spacer(Modifier.width(6.dp))
+                            Text(strings.retry, color = Color.White)
+                        }
+                        if (mediaState.sources.size > 1) {
+                            OutlinedButton(
+                                onClick = {
+                                    val nextIdx = (activeSourceIdx + 1) % mediaState.sources.size
+                                    viewModel.playerManager.switchSource(nextIdx)
+                                },
+                                border = BorderStroke(1.dp, NabdCyan)
+                            ) {
+                                Text(strings.nextSourceLabel, color = NabdCyan)
+                            }
+                        }
                     }
                 }
             }

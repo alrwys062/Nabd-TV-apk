@@ -60,6 +60,9 @@ interface NabdDao {
     @Query("SELECT * FROM channels WHERE serverId = 'manual'")
     suspend fun getManualChannels(): List<ChannelEntity>
 
+    @Query("SELECT * FROM channels WHERE serverId != :excludeServerId AND LOWER(name) LIKE :namePattern LIMIT 15")
+    suspend fun findChannelsOnOtherServers(excludeServerId: String, namePattern: String): List<ChannelEntity>
+
     @Query("SELECT * FROM channels LIMIT :limit OFFSET :offset")
     suspend fun getChannelsBatch(limit: Int, offset: Int): List<ChannelEntity>
 
@@ -124,8 +127,26 @@ interface NabdDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMovies(movies: List<MovieEntity>)
 
+    @Query("SELECT * FROM movies WHERE serverId = :serverId")
+    suspend fun getMoviesByServer(serverId: String): List<MovieEntity>
+
     @Query("DELETE FROM movies WHERE id = :id")
     suspend fun deleteMovie(id: String)
+
+    @Query("DELETE FROM movies WHERE serverId = :serverId")
+    suspend fun deleteMoviesByServer(serverId: String)
+
+    @Transaction
+    suspend fun replaceServerMovies(serverId: String, newMovies: List<MovieEntity>) {
+        val existingFavs = getMoviesByServer(serverId).filter { it.isFavorite }.map { it.id }.toSet()
+        deleteMoviesByServer(serverId)
+        val merged = newMovies.map {
+            if (existingFavs.contains(it.id)) it.copy(isFavorite = true) else it
+        }
+        merged.chunked(500).forEach { chunk ->
+            insertMovies(chunk)
+        }
+    }
 
     @Query("UPDATE movies SET isFavorite = :favorite WHERE id = :id")
     suspend fun setMovieFavorite(id: String, favorite: Boolean)
@@ -155,8 +176,26 @@ interface NabdDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSeries(series: List<SeriesEntity>)
 
+    @Query("SELECT * FROM series WHERE serverId = :serverId")
+    suspend fun getSeriesByServer(serverId: String): List<SeriesEntity>
+
     @Query("DELETE FROM series WHERE id = :id")
     suspend fun deleteSeries(id: String)
+
+    @Query("DELETE FROM series WHERE serverId = :serverId")
+    suspend fun deleteSeriesByServer(serverId: String)
+
+    @Transaction
+    suspend fun replaceServerSeries(serverId: String, newSeries: List<SeriesEntity>) {
+        val existingFavs = getSeriesByServer(serverId).filter { it.isFavorite }.map { it.id }.toSet()
+        deleteSeriesByServer(serverId)
+        val merged = newSeries.map {
+            if (existingFavs.contains(it.id)) it.copy(isFavorite = true) else it
+        }
+        merged.chunked(500).forEach { chunk ->
+            insertSeries(chunk)
+        }
+    }
 
     @Query("UPDATE series SET isFavorite = :favorite WHERE id = :id")
     suspend fun setSeriesFavorite(id: String, favorite: Boolean)
@@ -200,6 +239,34 @@ interface NabdDao {
 
     @Query("DELETE FROM servers WHERE id = :id")
     suspend fun deleteServer(id: String)
+
+    @Query("DELETE FROM channels")
+    suspend fun clearAllChannels()
+
+    @Query("DELETE FROM movies")
+    suspend fun clearAllMovies()
+
+    @Query("DELETE FROM series")
+    suspend fun clearAllSeries()
+
+    @Query("DELETE FROM episodes")
+    suspend fun clearAllEpisodes()
+
+    @Query("DELETE FROM servers")
+    suspend fun clearAllServers()
+
+    @Query("DELETE FROM category_configs")
+    suspend fun clearAllCategoryConfigs()
+
+    @Transaction
+    suspend fun wipeAllSourcesAndCatalog() {
+        clearAllChannels()
+        clearAllMovies()
+        clearAllSeries()
+        clearAllEpisodes()
+        clearAllServers()
+        clearAllCategoryConfigs()
+    }
 
     // EPG
     @Query("SELECT * FROM epg_programs WHERE endTimeMs >= :nowMs ORDER BY startTimeMs ASC LIMIT 500")

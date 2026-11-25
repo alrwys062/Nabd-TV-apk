@@ -100,9 +100,6 @@ class AdminViewModel(private val repository: NabdRepository) : ViewModel() {
                 sortOrder = sortOrder
             )
             repository.upsertServer(server)
-            if (server.id == "default_iptv_org") {
-                repository.settingsStore.setPrimaryM3uUrl(server.url)
-            }
             _statusToast.value = "Server saved: ${server.name}"
         }
     }
@@ -123,6 +120,20 @@ class AdminViewModel(private val repository: NabdRepository) : ViewModel() {
         viewModelScope.launch {
             repository.deleteServer(id)
             _statusToast.value = "Server removed"
+        }
+    }
+
+    fun resetServersToDefault() {
+        viewModelScope.launch {
+            _isBusy.value = true
+            repository.resetServersToDefault()
+            val res = repository.refreshAllEnabledServers(force = true)
+            _statusToast.value = if (res.isSuccess) {
+                "تمت إعادة ضبط السيرفرات وتحديث القنوات"
+            } else {
+                "تمت إعادة ضبط السيرفرات"
+            }
+            _isBusy.value = false
         }
     }
 
@@ -341,12 +352,18 @@ class AdminViewModel(private val repository: NabdRepository) : ViewModel() {
         contactUrl: String,
         channelUrl: String,
         announcement: String,
-        epgUrl: String
+        epgUrl: String,
+        developerName: String = "Hamodi9005",
+        developerUrl: String = "http://t.me/Hamodi9005"
     ) {
         viewModelScope.launch {
             repository.settingsStore.setTelegramLinks(botUrl.trim(), contactUrl.trim(), channelUrl.trim())
             repository.settingsStore.setAnnouncementText(announcement.trim())
             repository.settingsStore.setEpgUrl(epgUrl.trim())
+            repository.settingsStore.setDeveloperInfo(
+                developerName.trim().ifBlank { "Hamodi9005" },
+                developerUrl.trim().ifBlank { "http://t.me/Hamodi9005" }
+            )
             _statusToast.value = "Saved & Published"
         }
     }

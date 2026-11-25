@@ -42,6 +42,14 @@ class NabdRepository(
     val settingsStore: SettingsDataStore,
     val httpClient: OkHttpClient
 ) {
+    companion object {
+        const val SERVER_1_ID = "script_server_1"
+        const val SERVER_2_ID = "script_server_2"
+        const val SERVER_3_ID = "script_server_3"
+        const val SERVER_3_ALLOWED_CATS =
+            "76,556,62,209,51,13,530,529,63,83,575,528,52,438,439,441,440,442,477,443,444,445,446,447,448,501,455,456,457,458,459,460,461"
+    }
+
     private val json = Json {
         ignoreUnknownKeys = true
         isLenient = true
@@ -88,67 +96,130 @@ class NabdRepository(
     fun observeEpisodesForSeries(seriesId: String): Flow<List<EpisodeEntity>> =
         dao.observeEpisodesForSeries(seriesId)
 
-    suspend fun ensureDefaultServerRegistered() = withContext(Dispatchers.IO) {
-        val existing = dao.getAllServersOnce()
-        if (existing.none { it.id == "default_iptv_org" }) {
-            val primaryUrl = settingsStore.settingsFlow.first().primaryM3uUrl
-            dao.upsertServer(
-                ServerSourceEntity(
-                    id = "default_iptv_org",
-                    name = "IPTV-Org Global",
-                    type = ServerType.M3U,
-                    url = primaryUrl,
-                    isEnabled = true,
-                    sortOrder = 0
-                )
-            )
+    private fun defaultScriptServers(): List<ServerSourceEntity> = listOf(
+        ServerSourceEntity(
+            id = SERVER_1_ID,
+            name = "السيرفر 1",
+            type = ServerType.XTREAM,
+            url = "http://line.irav25.biz:8080",
+            xtreamHost = "http://line.irav25.biz:8080",
+            xtreamUsername = "542500725351739675",
+            xtreamPassword = "8457561352755875",
+            allowedCategoryIdsCsv = "",
+            isEnabled = true,
+            sortOrder = 0
+        ),
+        ServerSourceEntity(
+            id = SERVER_2_ID,
+            name = "السيرفر 2",
+            type = ServerType.XTREAM,
+            url = "http://startseven.tn:2052",
+            xtreamHost = "http://startseven.tn:2052",
+            xtreamUsername = "09746171",
+            xtreamPassword = "15445345",
+            allowedCategoryIdsCsv = "",
+            isEnabled = true,
+            sortOrder = 1
+        ),
+        ServerSourceEntity(
+            id = SERVER_3_ID,
+            name = "سيرفر 3 (الباقة المختارة)",
+            type = ServerType.XTREAM,
+            url = "http://startseven.tn:2052",
+            xtreamHost = "http://startseven.tn:2052",
+            xtreamUsername = "09746171",
+            xtreamPassword = "15445345",
+            allowedCategoryIdsCsv = SERVER_3_ALLOWED_CATS,
+            isEnabled = true,
+            sortOrder = 2
+        )
+    )
+
+    suspend fun ensureScriptSourcesRegistered() = withContext(Dispatchers.IO) {
+        val migrated = settingsStore.isScriptMigrated()
+        if (!migrated) {
+            dao.wipeAllSourcesAndCatalog()
+            dao.insertServers(defaultScriptServers())
+            settingsStore.markScriptMigratedAndResetDefaults()
+        } else {
+            val existing = dao.getAllServersOnce()
+            if (existing.isEmpty()) {
+                dao.insertServers(defaultScriptServers())
+            }
         }
     }
 
+    suspend fun resetServersToDefault() = withContext(Dispatchers.IO) {
+        dao.wipeAllSourcesAndCatalog()
+        dao.insertServers(defaultScriptServers())
+        settingsStore.markScriptMigratedAndResetDefaults()
+    }
+
     suspend fun refreshAllEnabledServers(force: Boolean = false): Result<Int> = withContext(Dispatchers.IO) {
-        ensureDefaultServerRegistered()
+        ensureScriptSourcesRegistered()
         val settings = settingsStore.settingsFlow.first()
         val now = System.currentTimeMillis()
         val refreshIntervalMs = settings.autoRefreshHours * 3600_000L
         val currentCount = dao.observeChannelCount().first()
+        val allEnabled = dao.getAllServersOnce().filter { it.isEnabled }
 
-        if (!force && currentCount > 0 && (now - settings.lastPlaylistRefreshMs) < refreshIntervalMs) {
+        val serversNeedingSync = if (!force && currentCount > 0 && (now - settings.lastPlaylistRefreshMs) < refreshIntervalMs) {
+            allEnabled.filter { srv ->
+                !srv.lastStatusOk || dao.getChannelsByServer(srv.id).isEmpty()
+            }
+        } else {
+            allEnabled
+        }
+
+        if (serversNeedingSync.isEmpty()) {
             return@withContext Result.success(currentCount)
         }
 
-        val servers = dao.getAllServersOnce().filter { it.isEnabled }
         var totalImported = 0
         var lastError: Throwable? = null
+        val failedServerNames = mutableListOf<String>()
+        val xtreamSnapshotCache = mutableMapOf<String, com.example.services.XtreamLiveSnapshot>()
 
-        // Also sync remote JSON if configured
-        if (settings.remoteJsonSyncUrl.isNotBlank()) {
+        if (force && settings.remoteJsonSyncUrl.isNotBlank()) {
             runCatching { syncFromRemoteJsonUrl(settings.remoteJsonSyncUrl) }
         }
 
-        for (server in servers) {
-            val res = syncSingleServer(server)
+        for (server in serversNeedingSync) {
+            val res = syncSingleServer(server, xtreamSnapshotCache)
             res.onSuccess { count ->
                 totalImported += count
             }.onFailure { err ->
                 lastError = err
+                failedServerNames.add(server.name)
             }
         }
 
         if (totalImported > 0 || currentCount > 0) {
-            settingsStore.setLastPlaylistRefresh(System.currentTimeMillis())
-            Result.success(totalImported)
+            if (failedServerNames.isEmpty()) {
+                settingsStore.setLastPlaylistRefresh(System.currentTimeMillis())
+            }
+            if (failedServerNames.isNotEmpty()) {
+                Result.failure(
+                    IllegalStateException("تعذر الاتصال بـ: ${failedServerNames.joinToString(" ، ")}")
+                )
+            } else {
+                Result.success(totalImported)
+            }
         } else {
-            Result.failure(lastError ?: IllegalStateException("Failed to fetch playlists"))
+            Result.failure(lastError ?: IllegalStateException("تعذر الاتصال بالسيرفرات"))
         }
     }
 
-    suspend fun syncSingleServer(server: ServerSourceEntity): Result<Int> = withContext(Dispatchers.IO) {
+    suspend fun syncSingleServer(
+        server: ServerSourceEntity,
+        snapshotCache: MutableMap<String, com.example.services.XtreamLiveSnapshot>? = null
+    ): Result<Int> = withContext(Dispatchers.IO) {
         runCatching {
             when (server.type) {
                 ServerType.M3U -> {
                     val req = Request.Builder()
                         .url(server.url)
-                        .header("User-Agent", "NabdTV/1.0 (Android)")
+                        .header("User-Agent", "IPTVSmartersPlayer")
                         .build()
                     httpClient.newCall(req).execute().use { resp ->
                         if (!resp.isSuccessful) error("HTTP ${resp.code}")
@@ -156,6 +227,7 @@ class NabdRepository(
                         val parseResult = InputStreamReader(body.byteStream(), Charsets.UTF_8).use { reader ->
                             M3uParser.parse(reader, server.id)
                         }
+                        if (parseResult.channels.isEmpty()) error("Empty M3U playlist")
                         dao.replaceServerChannels(server.id, parseResult.channels)
                         syncCategoriesFromChannels(parseResult.channels)
                         val currentEpg = settingsStore.settingsFlow.first().epgUrl
@@ -182,17 +254,29 @@ class NabdRepository(
                     }
                 }
                 ServerType.XTREAM -> {
+                    val allowedCats = server.allowedCategoryIdsCsv
+                        .split(",")
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
                     val result = xtreamClient.fetchCatalog(
                         serverId = server.id,
                         host = server.xtreamHost.ifBlank { server.url },
                         username = server.xtreamUsername,
-                        password = server.xtreamPassword
+                        password = server.xtreamPassword,
+                        allowedCategoryIds = allowedCats,
+                        snapshotCache = snapshotCache
                     )
-                    dao.replaceServerChannels(server.id, result.channels)
-                    if (result.movies.isNotEmpty()) dao.insertMovies(result.movies)
-                    if (result.series.isNotEmpty()) dao.insertSeries(result.series)
+                    if (result.channels.isNotEmpty()) {
+                        dao.replaceServerChannels(server.id, result.channels)
+                        syncCategoriesFromChannels(result.channels)
+                    }
+                    if (result.movies.isNotEmpty()) {
+                        dao.replaceServerMovies(server.id, result.movies)
+                    }
+                    if (result.series.isNotEmpty()) {
+                        dao.replaceServerSeries(server.id, result.series)
+                    }
                     if (result.episodes.isNotEmpty()) dao.insertEpisodes(result.episodes)
-                    syncCategoriesFromChannels(result.channels)
                     dao.upsertServer(
                         server.copy(lastSyncedAt = System.currentTimeMillis(), lastStatusOk = true)
                     )
@@ -201,6 +285,23 @@ class NabdRepository(
             }
         }.onFailure {
             dao.upsertServer(server.copy(lastStatusOk = false))
+        }
+    }
+
+    suspend fun loadSeriesEpisodesIfNeeded(series: SeriesEntity) = withContext(Dispatchers.IO) {
+        val existing = dao.getEpisodesForSeriesOnce(series.id)
+        if (existing.isNotEmpty()) return@withContext
+        val server = dao.getAllServersOnce().firstOrNull { it.id == series.serverId } ?: return@withContext
+        if (server.type != ServerType.XTREAM) return@withContext
+        val fetched = xtreamClient.fetchSeriesEpisodes(
+            serverId = server.id,
+            host = server.xtreamHost.ifBlank { server.url },
+            username = server.xtreamUsername,
+            password = server.xtreamPassword,
+            seriesRoomId = series.id
+        )
+        if (fetched.isNotEmpty()) {
+            fetched.chunked(500).forEach { dao.insertEpisodes(it) }
         }
     }
 
@@ -254,7 +355,9 @@ class NabdRepository(
             epgUrl = settings.epgUrl,
             telegramBotUrl = settings.telegramBotUrl,
             telegramContactUrl = settings.telegramContactUrl,
-            telegramChannelUrl = settings.telegramChannelUrl
+            telegramChannelUrl = settings.telegramChannelUrl,
+            developerName = settings.developerName,
+            developerUrl = settings.developerUrl
         )
         json.encodeToString(payload)
     }
@@ -303,6 +406,9 @@ class NabdRepository(
             payload.telegramContactUrl,
             payload.telegramChannelUrl
         )
+        if (payload.developerName.isNotBlank() || payload.developerUrl.isNotBlank()) {
+            settingsStore.setDeveloperInfo(payload.developerName, payload.developerUrl)
+        }
     }
 
     private suspend fun syncCategoriesFromChannels(channels: List<ChannelEntity>) {
@@ -427,6 +533,8 @@ class NabdRepository(
     suspend fun upsertServer(server: ServerSourceEntity) = dao.upsertServer(server)
     suspend fun deleteServer(id: String) {
         dao.deleteChannelsByServer(id)
+        dao.deleteMoviesByServer(id)
+        dao.deleteSeriesByServer(id)
         dao.deleteServer(id)
     }
 
@@ -457,6 +565,33 @@ class NabdRepository(
     suspend fun getMovieById(id: String) = dao.getMovieById(id)
     suspend fun getSeriesById(id: String) = dao.getSeriesById(id)
     suspend fun getEpisodesForSeriesOnce(seriesId: String) = dao.getEpisodesForSeriesOnce(seriesId)
+
+    suspend fun findFailoverChannelsFor(channel: ChannelEntity): List<ChannelEntity> =
+        withContext(Dispatchers.IO) {
+            val cleaned = channel.name
+                .replace(Regex("[\\[\\]()|•:\\-_]+"), " ")
+                .trim()
+            val token = cleaned.split(Regex("\\s+"))
+                .firstOrNull { it.length >= 3 }
+                ?.lowercase()
+                ?: cleaned.lowercase()
+            if (token.isBlank()) return@withContext emptyList()
+            val candidates = dao.findChannelsOnOtherServers(channel.serverId, "%$token%")
+            val targetNorm = normalizeChannelName(channel.name)
+            candidates.sortedByDescending { candidate ->
+                val candNorm = normalizeChannelName(candidate.name)
+                when {
+                    candNorm == targetNorm -> 3
+                    candNorm.contains(targetNorm) || targetNorm.contains(candNorm) -> 2
+                    else -> 1
+                }
+            }.take(3)
+        }
+
+    private fun normalizeChannelName(raw: String): String =
+        raw.lowercase()
+            .replace(Regex("\\b(hd|fhd|uhd|sd|4k|h265|hevc|vip|raw|ar)\\b"), "")
+            .replace(Regex("[^\\p{L}\\p{N}]"), "")
 
     suspend fun clearCache() = withContext(Dispatchers.IO) {
         dao.clearEpg()

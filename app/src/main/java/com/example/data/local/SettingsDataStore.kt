@@ -12,6 +12,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "nabd_tv_prefs")
@@ -19,7 +20,7 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(na
 data class AppSettings(
     val isFirstLaunch: Boolean = true,
     val language: String = "ar",
-    val adminPin: String = "1234",
+    val adminPin: String = DEFAULT_ADMIN_PIN,
     val kidsLockEnabled: Boolean = false,
     val kidsLockPin: String = "0000",
     val hiddenCategories: Set<String> = emptySet(),
@@ -34,19 +35,24 @@ data class AppSettings(
     val subtitleColorHex: Long = 0xFFFFFFFF,
     val autoRefreshHours: Int = 24,
     val lastPlaylistRefreshMs: Long = 0L,
-    val primaryM3uUrl: String = DEFAULT_IPTV_ORG_M3U,
+    val primaryM3uUrl: String = "",
     val epgUrl: String = "",
     val remoteJsonSyncUrl: String = "",
     val announcementText: String = "",
     val telegramBotUrl: String = DEFAULT_TELEGRAM_BOT,
     val telegramContactUrl: String = DEFAULT_TELEGRAM_CONTACT,
-    val telegramChannelUrl: String = DEFAULT_TELEGRAM_CHANNEL
+    val telegramChannelUrl: String = DEFAULT_TELEGRAM_CHANNEL,
+    val developerName: String = DEFAULT_DEVELOPER_NAME,
+    val developerUrl: String = DEFAULT_DEVELOPER_URL,
+    val activeServerId: String = "all"
 ) {
     companion object {
-        const val DEFAULT_IPTV_ORG_M3U = "https://iptv-org.github.io/iptv/index.m3u"
+        const val DEFAULT_ADMIN_PIN = "123+098123"
         const val DEFAULT_TELEGRAM_BOT = "https://t.me/qweqwe2019bot2bot"
         const val DEFAULT_TELEGRAM_CONTACT = "https://t.me/Abu2Saleh"
         const val DEFAULT_TELEGRAM_CHANNEL = "https://t.me/pixels_x_mods_apk"
+        const val DEFAULT_DEVELOPER_NAME = "Hamodi9005"
+        const val DEFAULT_DEVELOPER_URL = "http://t.me/Hamodi9005"
     }
 }
 
@@ -77,13 +83,17 @@ class SettingsDataStore(private val context: Context) {
         val TG_BOT = stringPreferencesKey("tg_bot")
         val TG_CONTACT = stringPreferencesKey("tg_contact")
         val TG_CHANNEL = stringPreferencesKey("tg_channel")
+        val DEV_NAME = stringPreferencesKey("dev_name")
+        val DEV_URL = stringPreferencesKey("dev_url")
+        val ACTIVE_SERVER_ID = stringPreferencesKey("active_server_id")
+        val MIGRATED_SCRIPT_V3 = booleanPreferencesKey("migrated_script_v3")
     }
 
     val settingsFlow: Flow<AppSettings> = context.dataStore.data.map { prefs ->
         AppSettings(
             isFirstLaunch = prefs[Keys.FIRST_LAUNCH] ?: true,
             language = prefs[Keys.LANGUAGE] ?: "ar",
-            adminPin = prefs[Keys.ADMIN_PIN] ?: "1234",
+            adminPin = prefs[Keys.ADMIN_PIN] ?: AppSettings.DEFAULT_ADMIN_PIN,
             kidsLockEnabled = prefs[Keys.KIDS_LOCK_ENABLED] ?: false,
             kidsLockPin = prefs[Keys.KIDS_LOCK_PIN] ?: "0000",
             hiddenCategories = prefs[Keys.HIDDEN_CATEGORIES] ?: emptySet(),
@@ -98,14 +108,36 @@ class SettingsDataStore(private val context: Context) {
             subtitleColorHex = prefs[Keys.SUBTITLE_COLOR] ?: 0xFFFFFFFF,
             autoRefreshHours = prefs[Keys.AUTO_REFRESH_HOURS] ?: 24,
             lastPlaylistRefreshMs = prefs[Keys.LAST_REFRESH_MS] ?: 0L,
-            primaryM3uUrl = prefs[Keys.PRIMARY_M3U_URL] ?: AppSettings.DEFAULT_IPTV_ORG_M3U,
+            primaryM3uUrl = prefs[Keys.PRIMARY_M3U_URL] ?: "",
             epgUrl = prefs[Keys.EPG_URL] ?: "",
             remoteJsonSyncUrl = prefs[Keys.REMOTE_JSON_URL] ?: "",
             announcementText = prefs[Keys.ANNOUNCEMENT_TEXT] ?: "",
             telegramBotUrl = prefs[Keys.TG_BOT] ?: AppSettings.DEFAULT_TELEGRAM_BOT,
             telegramContactUrl = prefs[Keys.TG_CONTACT] ?: AppSettings.DEFAULT_TELEGRAM_CONTACT,
-            telegramChannelUrl = prefs[Keys.TG_CHANNEL] ?: AppSettings.DEFAULT_TELEGRAM_CHANNEL
+            telegramChannelUrl = prefs[Keys.TG_CHANNEL] ?: AppSettings.DEFAULT_TELEGRAM_CHANNEL,
+            developerName = prefs[Keys.DEV_NAME] ?: AppSettings.DEFAULT_DEVELOPER_NAME,
+            developerUrl = prefs[Keys.DEV_URL] ?: AppSettings.DEFAULT_DEVELOPER_URL,
+            activeServerId = prefs[Keys.ACTIVE_SERVER_ID] ?: "all"
         )
+    }
+
+    suspend fun isScriptMigrated(): Boolean {
+        return context.dataStore.data.first()[Keys.MIGRATED_SCRIPT_V3] ?: false
+    }
+
+    suspend fun markScriptMigratedAndResetDefaults() {
+        context.dataStore.edit {
+            it[Keys.ADMIN_PIN] = AppSettings.DEFAULT_ADMIN_PIN
+            it[Keys.PRIMARY_M3U_URL] = ""
+            it[Keys.LAST_REFRESH_MS] = 0L
+            it[Keys.TG_BOT] = AppSettings.DEFAULT_TELEGRAM_BOT
+            it[Keys.TG_CONTACT] = AppSettings.DEFAULT_TELEGRAM_CONTACT
+            it[Keys.TG_CHANNEL] = AppSettings.DEFAULT_TELEGRAM_CHANNEL
+            it[Keys.DEV_NAME] = AppSettings.DEFAULT_DEVELOPER_NAME
+            it[Keys.DEV_URL] = AppSettings.DEFAULT_DEVELOPER_URL
+            it[Keys.ACTIVE_SERVER_ID] = "all"
+            it[Keys.MIGRATED_SCRIPT_V3] = true
+        }
     }
 
     suspend fun completeFirstLaunch(language: String) {
@@ -199,5 +231,16 @@ class SettingsDataStore(private val context: Context) {
             it[Keys.TG_CONTACT] = contact
             it[Keys.TG_CHANNEL] = channel
         }
+    }
+
+    suspend fun setDeveloperInfo(name: String, url: String) {
+        context.dataStore.edit {
+            it[Keys.DEV_NAME] = name
+            it[Keys.DEV_URL] = url
+        }
+    }
+
+    suspend fun setActiveServerId(serverId: String) {
+        context.dataStore.edit { it[Keys.ACTIVE_SERVER_ID] = serverId }
     }
 }

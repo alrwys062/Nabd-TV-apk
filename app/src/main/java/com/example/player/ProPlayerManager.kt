@@ -15,6 +15,7 @@ import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
@@ -25,7 +26,11 @@ import com.example.data.model.PlayableSource
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import okhttp3.Cookie
+import okhttp3.CookieJar
+import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
+import java.util.concurrent.ConcurrentHashMap
 
 enum class AspectRatioMode(val label: String, val resizeMode: Int) {
     FIT("Fit", AspectRatioFrameLayout.RESIZE_MODE_FIT),
@@ -50,8 +55,37 @@ class ProPlayerManager(
 ) {
     private val appContext = context.applicationContext
     private val trackSelector = DefaultTrackSelector(appContext)
-    private val httpFactory = OkHttpDataSource.Factory(okHttpClient)
-        .setUserAgent("NabdTV/1.0 (Linux; Android)")
+
+    private val fallbackUserAgents = listOf(
+        "IPTVSmartersPlayer",
+        "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+        "VLC/3.0.20 LibVLC/3.0.20"
+    )
+
+    private val cookieStore = ConcurrentHashMap<String, List<Cookie>>()
+    private val playerOkHttpClient: OkHttpClient = okHttpClient.newBuilder()
+        .cache(null)
+        .cookieJar(object : CookieJar {
+            override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
+                cookieStore[url.host] = cookies
+            }
+
+            override fun loadForRequest(url: HttpUrl): List<Cookie> {
+                return cookieStore[url.host].orEmpty().filter { it.expiresAt > System.currentTimeMillis() }
+            }
+        })
+        .followRedirects(true)
+        .followSslRedirects(true)
+        .build()
+
+    private val httpFactory = OkHttpDataSource.Factory(playerOkHttpClient)
+        .setUserAgent(fallbackUserAgents.first())
+        .setDefaultRequestProperties(
+            mapOf(
+                "Accept" to "*/*",
+                "Connection" to "keep-alive"
+            )
+        )
     private val dataSourceFactory = DefaultDataSource.Factory(appContext, httpFactory)
 
     val player: ExoPlayer = ExoPlayer.Builder(appContext)
@@ -100,6 +134,8 @@ class ProPlayerManager(
     private var currentTitle: String = ""
     private var currentSubtitleUrl: String = ""
     private var retryCount = 0
+    private var uaIndex = 0
+    private var lastHttpStatusCode: Int? = null
     var onEndedCallback: (() -> Unit)? = null
 
     init {
@@ -142,6 +178,8 @@ class ProPlayerManager(
         sources = sourcesList.filter { it.url.isNotBlank() }
         currentSubtitleUrl = subtitleUrl
         retryCount = 0
+        uaIndex = 0
+        lastHttpStatusCode = null
         _errorMessage.value = null
         _switchingStatus.value = null
 
@@ -155,6 +193,10 @@ class ProPlayerManager(
 
     fun switchSource(index: Int) {
         if (index in sources.indices) {
+            retryCount = 0
+            uaIndex = 0
+            lastHttpStatusCode = null
+            _errorMessage.value = null
             val pos = player.currentPosition.coerceAtLeast(0L)
             playSourceAt(index, pos)
         }
@@ -162,6 +204,8 @@ class ProPlayerManager(
 
     fun retryCurrent() {
         retryCount = 0
+        uaIndex = 0
+        lastHttpStatusCode = null
         _errorMessage.value = null
         playSourceAt(_activeSourceIndex.value, player.currentPosition.coerceAtLeast(0L))
     }
@@ -169,11 +213,12 @@ class ProPlayerManager(
     private fun playSourceAt(index: Int, startPositionMs: Long) {
         val source = sources.getOrNull(index) ?: return
         _activeSourceIndex.value = index
-        if (source.userAgent.isNotBlank()) {
-            httpFactory.setUserAgent(source.userAgent)
+        val effectiveUserAgent = if (source.userAgent.isNotBlank()) {
+            source.userAgent
         } else {
-            httpFactory.setUserAgent("NabdTV/1.0 (Linux; Android)")
+            fallbackUserAgents.getOrElse(uaIndex) { fallbackUserAgents.first() }
         }
+        httpFactory.setUserAgent(effectiveUserAgent)
 
         val mimeType = inferMimeType(source.url)
         val itemBuilder = MediaItem.Builder()
@@ -205,6 +250,31 @@ class ProPlayerManager(
     }
 
     private fun handlePlaybackFailure(error: PlaybackException) {
+        val httpCode = extractHttpStatusCode(error)
+        if (httpCode != null) {
+            lastHttpStatusCode = httpCode
+        }
+
+        if (httpCode == 401 || httpCode == 403) {
+            val currentSource = sources.getOrNull(_activeSourceIndex.value)
+            if (currentSource != null && currentSource.userAgent.isBlank() && uaIndex + 1 < fallbackUserAgents.size) {
+                uaIndex++
+                _switchingStatus.value = "reconnecting"
+                playSourceAt(_activeSourceIndex.value, 0L)
+                return
+            }
+
+            switchToNextSourceOrFail(error)
+            return
+        }
+
+        // For definitive upstream HTTP errors (503, 502, 504, 404, 410, 429, etc.),
+        // immediately move to the next backup/failover source instead of re-hammering the same URL.
+        if (httpCode != null && httpCode >= 400) {
+            switchToNextSourceOrFail(error)
+            return
+        }
+
         if (retryCount < 1) {
             retryCount++
             _switchingStatus.value = "reconnecting"
@@ -213,16 +283,40 @@ class ProPlayerManager(
             return
         }
 
+        switchToNextSourceOrFail(error)
+    }
+
+    private fun switchToNextSourceOrFail(error: PlaybackException) {
         val nextIndex = _activeSourceIndex.value + 1
         if (nextIndex < sources.size) {
             retryCount = 0
+            uaIndex = 0
             _switchingStatus.value = "switching"
             playSourceAt(nextIndex, 0L)
         } else {
             _isBuffering.value = false
             _switchingStatus.value = null
-            _errorMessage.value = error.localizedMessage ?: "Playback failed"
+            _errorMessage.value = when (lastHttpStatusCode) {
+                401 -> "HTTP_401"
+                403 -> "HTTP_403"
+                404, 410 -> "HTTP_404"
+                500, 502, 503, 504 -> "HTTP_503"
+                else -> error.localizedMessage ?: "Playback failed"
+            }
         }
+    }
+
+    private fun extractHttpStatusCode(error: PlaybackException): Int? {
+        var cause: Throwable? = error.cause
+        var depth = 0
+        while (cause != null && depth < 10) {
+            if (cause is HttpDataSource.InvalidResponseCodeException) {
+                return cause.responseCode
+            }
+            cause = cause.cause
+            depth++
+        }
+        return null
     }
 
     fun setAudioOnly(audioOnly: Boolean) {

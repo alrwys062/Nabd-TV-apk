@@ -56,7 +56,7 @@ data class ChannelEntity(
     val language: String = "Arabic",
     val tvgId: String = "",
     val userAgent: String = "",
-    val serverId: String = "default_iptv_org",
+    val serverId: String = "script_server_1",
     val isFavorite: Boolean = false,
     val isFeatured: Boolean = false,
     val healthStatus: StreamHealthStatus = StreamHealthStatus.UNKNOWN,
@@ -138,6 +138,7 @@ data class ServerSourceEntity(
     val xtreamHost: String = "",
     val xtreamUsername: String = "",
     val xtreamPassword: String = "",
+    val allowedCategoryIdsCsv: String = "",
     val isEnabled: Boolean = true,
     val sortOrder: Int = 0,
     val lastSyncedAt: Long = 0L,
@@ -231,7 +232,9 @@ data class BackupPayload(
     val epgUrl: String = "",
     val telegramBotUrl: String = "https://t.me/qweqwe2019bot2bot",
     val telegramContactUrl: String = "https://t.me/Abu2Saleh",
-    val telegramChannelUrl: String = "https://t.me/pixels_x_mods_apk"
+    val telegramChannelUrl: String = "https://t.me/pixels_x_mods_apk",
+    val developerName: String = "Hamodi9005",
+    val developerUrl: String = "http://t.me/Hamodi9005"
 )
 
 @Serializable

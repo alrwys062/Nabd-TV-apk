@@ -58,7 +58,7 @@ class NabdTypeConverters {
         SearchHistoryEntity::class,
         ChannelReportEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 @TypeConverters(NabdTypeConverters::class)

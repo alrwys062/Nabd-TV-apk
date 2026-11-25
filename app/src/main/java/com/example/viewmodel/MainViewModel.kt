@@ -19,6 +19,7 @@ import com.example.data.model.EpisodeEntity
 import com.example.data.model.MovieEntity
 import com.example.data.model.SearchHistoryEntity
 import com.example.data.model.SeriesEntity
+import com.example.data.model.ServerSourceEntity
 import com.example.data.model.StreamHealthStatus
 import com.example.data.model.WatchHistoryEntity
 import com.example.data.repository.NabdRepository
@@ -73,6 +74,9 @@ class MainViewModel(
     val categoryConfigs: StateFlow<List<CategoryConfigEntity>> = repository.categoryConfigsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val servers: StateFlow<List<ServerSourceEntity>> = repository.serversFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     val visibleChannels: StateFlow<List<ChannelEntity>> = combine(
         allChannels,
         settings,
@@ -82,7 +86,8 @@ class MainViewModel(
         val kidsHidden = if (prefs.kidsLockEnabled) prefs.hiddenCategories else emptySet()
         val blocked = invisible + kidsHidden
         channels.filter { ch ->
-            !blocked.contains(ch.category) &&
+            (prefs.activeServerId == "all" || ch.serverId == prefs.activeServerId) &&
+                !blocked.contains(ch.category) &&
                 (!prefs.hideDeadChannels || ch.healthStatus != StreamHealthStatus.OFFLINE)
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -126,10 +131,12 @@ class MainViewModel(
             if (explicitFeatured.isNotEmpty()) explicitFeatured else visible.take(5)
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val categories: StateFlow<List<String>> = repository.channelCategoriesFlow
-        .combine(settings) { cats, prefs ->
+    val categories: StateFlow<List<String>> = visibleChannels
+        .combine(settings) { channels, prefs ->
             val kidsHidden = if (prefs.kidsLockEnabled) prefs.hiddenCategories else emptySet()
-            cats.filterNot { kidsHidden.contains(it) }
+            channels.map { it.category }
+                .filter { it.isNotBlank() && !kidsHidden.contains(it) }
+                .distinct()
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val countries: StateFlow<List<String>> = repository.channelCountriesFlow
@@ -139,10 +146,16 @@ class MainViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val allMovies: StateFlow<List<MovieEntity>> = repository.allMoviesFlow
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        .combine(settings) { movies, prefs ->
+            if (prefs.activeServerId == "all") movies
+            else movies.filter { it.serverId == prefs.activeServerId || it.serverId == "manual" }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val allSeries: StateFlow<List<SeriesEntity>> = repository.allSeriesFlow
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        .combine(settings) { series, prefs ->
+            if (prefs.activeServerId == "all") series
+            else series.filter { it.serverId == prefs.activeServerId || it.serverId == "manual" }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val favoriteChannels: StateFlow<List<ChannelEntity>> = repository.favoriteChannelsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -259,8 +272,36 @@ class MainViewModel(
         }
     }
 
+    fun selectActiveServer(serverId: String) {
+        viewModelScope.launch {
+            repository.settingsStore.setActiveServerId(serverId)
+            _selectedHomeCategory.value = "All"
+            _liveFilter.value = _liveFilter.value.copy(category = "All")
+
+            if (serverId != "all") {
+                val hasChannels = allChannels.value.any { it.serverId == serverId }
+                val srv = servers.value.firstOrNull { it.id == serverId }
+                if (srv != null && (!hasChannels || !srv.lastStatusOk) && !_isSyncing.value) {
+                    _isSyncing.value = true
+                    _syncMessage.value = null
+                    val res = repository.syncSingleServer(srv)
+                    res.onFailure {
+                        _syncMessage.value = "تعذر الاتصال بـ ${srv.name} — قد يكون محجوباً أو متوقفاً من الشبكة الحالية"
+                    }
+                    _isSyncing.value = false
+                }
+            }
+        }
+    }
+
     fun observeEpisodesForSeries(seriesId: String): Flow<List<EpisodeEntity>> =
         repository.observeEpisodesForSeries(seriesId)
+
+    fun ensureSeriesEpisodesLoaded(series: SeriesEntity) {
+        viewModelScope.launch {
+            repository.loadSeriesEpisodesIfNeeded(series)
+        }
+    }
 
     // Settings updates
     fun setDefaultQuality(quality: String) = viewModelScope.launch {

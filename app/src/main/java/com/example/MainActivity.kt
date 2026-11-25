@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -117,6 +118,7 @@ private fun NabdAppRoot(
     val settings by mainViewModel.settings.collectAsStateWithLifecycle()
     val isOnline by mainViewModel.isOnline.collectAsStateWithLifecycle()
     val isSyncing by mainViewModel.isSyncing.collectAsStateWithLifecycle()
+    val syncMessage by mainViewModel.syncMessage.collectAsStateWithLifecycle()
     val categories by mainViewModel.categories.collectAsStateWithLifecycle()
     val countries by mainViewModel.countries.collectAsStateWithLifecycle()
     val languages by mainViewModel.languages.collectAsStateWithLifecycle()
@@ -137,6 +139,7 @@ private fun NabdAppRoot(
     val downloads by mainViewModel.downloads.collectAsStateWithLifecycle()
     val epgPrograms by mainViewModel.epgPrograms.collectAsStateWithLifecycle()
     val searchHistory by mainViewModel.searchHistory.collectAsStateWithLifecycle()
+    val servers by mainViewModel.servers.collectAsStateWithLifecycle()
 
     val activeMainTab = remember(currentRouteString) {
         when {
@@ -215,6 +218,7 @@ private fun NabdAppRoot(
                             settings = settings,
                             isOnline = isOnline,
                             isSyncing = isSyncing,
+                            syncMessage = syncMessage,
                             categories = categories,
                             selectedCategory = selectedHomeCat,
                             featuredChannels = featuredChannels,
@@ -223,6 +227,8 @@ private fun NabdAppRoot(
                             movies = movies,
                             series = series,
                             watchHistory = watchHistory,
+                            servers = servers,
+                            onSelectServer = { mainViewModel.selectActiveServer(it) },
                             onSelectCategory = { mainViewModel.selectHomeCategory(it) },
                             onSearchClick = { navController.navigate(NabdRoute.Search) },
                             onRefreshClick = { mainViewModel.refreshPlaylists(force = true) },
@@ -330,6 +336,9 @@ private fun NabdAppRoot(
                         val args = entry.toRoute<NabdRoute.SeriesDetail>()
                         val item = series.firstOrNull { it.id == args.seriesId }
                         if (item != null) {
+                            LaunchedEffect(item.id) {
+                                mainViewModel.ensureSeriesEpisodesLoaded(item)
+                            }
                             val episodes by mainViewModel.observeEpisodesForSeries(item.id)
                                 .collectAsStateWithLifecycle(initialValue = emptyList())
                             SeriesDetailScreen(
