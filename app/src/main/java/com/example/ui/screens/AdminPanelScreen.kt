@@ -237,6 +237,7 @@ fun AdminPanelScreen(
             item { AdminActionRow(strings.categoriesBanners, { activeSheet = AdminSheet.CATEGORIES }, "admin_categories_btn") }
             item { AdminActionRow(strings.telegramLinksAction, { activeSheet = AdminSheet.TELEGRAM }, "admin_telegram_btn") }
             item { AdminActionRow(strings.backupRestore, { activeSheet = AdminSheet.BACKUP }, "admin_backup_btn") }
+            item { AdminActionRow(strings.adultPurgeNowButton, { viewModel.purgeAdultContent() }, "admin_purge_adult_btn") }
 
             if (reports.isNotEmpty()) {
                 item {

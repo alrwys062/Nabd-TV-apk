@@ -5,6 +5,7 @@ import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
 import android.util.Rational
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -21,8 +22,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -35,6 +38,7 @@ import com.example.data.model.ContentType
 import com.example.ui.components.MainTab
 import com.example.ui.components.NabdFloatingBottomBar
 import com.example.ui.components.NabdNavigationRail
+import com.example.ui.components.PinEntryDialog
 import com.example.ui.navigation.NabdRoute
 import com.example.ui.screens.AdminPanelScreen
 import com.example.ui.screens.EpgScreen
@@ -140,6 +144,9 @@ private fun NabdAppRoot(
     val epgPrograms by mainViewModel.epgPrograms.collectAsStateWithLifecycle()
     val searchHistory by mainViewModel.searchHistory.collectAsStateWithLifecycle()
     val servers by mainViewModel.servers.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val strings = com.example.ui.theme.LocalAppStrings.current
+    var showLiveAdultUnlockDialog by remember { mutableStateOf(false) }
 
     val activeMainTab = remember(currentRouteString) {
         when {
@@ -264,10 +271,20 @@ private fun NabdAppRoot(
                             filter = liveFilter,
                             isArabic = settings.language == "ar",
                             isSyncing = isSyncing,
+                            isAdultLocked = settings.adultLockEnabled || settings.adultDeletePermanently,
                             healthCheckProgress = healthProgress,
                             onFilterChange = { mainViewModel.updateLiveFilter(it) },
                             onToggleHideDead = { mainViewModel.setHideDeadChannels(it) },
                             onRunHealthCheck = { mainViewModel.runChannelHealthCheck() },
+                            onToggleAdultLock = {
+                                if (settings.adultDeletePermanently) {
+                                    Toast.makeText(context, strings.adultBlockedToast, Toast.LENGTH_SHORT).show()
+                                } else if (settings.adultLockEnabled) {
+                                    showLiveAdultUnlockDialog = true
+                                } else {
+                                    mainViewModel.setAdultLockEnabled(true)
+                                }
+                            },
                             onRefresh = { mainViewModel.refreshPlaylists(force = true) },
                             onPlayChannel = { ch -> navController.navigate(NabdRoute.Player("CHANNEL", ch.id)) },
                             onFavoriteChannel = { mainViewModel.toggleChannelFavorite(it) },
@@ -308,6 +325,10 @@ private fun NabdAppRoot(
                             onAutoRefreshChange = { mainViewModel.setAutoRefreshHours(it) },
                             onKidsLockToggle = { en, pin -> mainViewModel.setKidsLock(en, pin) },
                             onToggleHiddenCategory = { mainViewModel.toggleHiddenCategory(it) },
+                            onAdultLockToggle = { mainViewModel.setAdultLockEnabled(it) },
+                            onAdultDeletePermanentlyToggle = { mainViewModel.setAdultDeletePermanently(it) },
+                            onPurgeAdultNow = { mainViewModel.purgeAdultContentNow() },
+                            onChangeAdultPin = { mainViewModel.setAdultPin(it) },
                             onChangeAdminPin = { mainViewModel.setAdminPin(it) },
                             onRefreshNow = { mainViewModel.refreshPlaylists(force = true) },
                             onClearCache = { mainViewModel.clearCache() },
@@ -430,6 +451,18 @@ private fun NabdAppRoot(
                         currentTab = activeMainTab,
                         onTabSelected = navigateToTab,
                         modifier = Modifier.align(Alignment.BottomCenter)
+                    )
+                }
+
+                if (showLiveAdultUnlockDialog) {
+                    PinEntryDialog(
+                        title = strings.adultLockPinTitle,
+                        expectedPin = settings.adultPin,
+                        onDismiss = { showLiveAdultUnlockDialog = false },
+                        onConfirmed = {
+                            mainViewModel.setAdultLockEnabled(false)
+                            showLiveAdultUnlockDialog = false
+                        }
                     )
                 }
             }

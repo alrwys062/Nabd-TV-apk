@@ -27,10 +27,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.ChildCare
+import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Visibility
@@ -97,6 +100,10 @@ fun SettingsScreen(
     onAutoRefreshChange: (Int) -> Unit,
     onKidsLockToggle: (Boolean, String?) -> Unit,
     onToggleHiddenCategory: (String) -> Unit,
+    onAdultLockToggle: (Boolean) -> Unit,
+    onAdultDeletePermanentlyToggle: (Boolean) -> Unit,
+    onPurgeAdultNow: () -> Unit,
+    onChangeAdultPin: (String) -> Unit,
     onChangeAdminPin: (String) -> Unit,
     onRefreshNow: () -> Unit,
     onClearCache: () -> Unit,
@@ -111,6 +118,10 @@ fun SettingsScreen(
     var showAdminPinChangeDialog by remember { mutableStateOf(false) }
     var showKidsPinSetupDialog by remember { mutableStateOf(false) }
     var showKidsPinVerifyDialog by remember { mutableStateOf(false) }
+    var showAdultUnlockPinDialog by remember { mutableStateOf(false) }
+    var showAdultDisableDeletePinDialog by remember { mutableStateOf(false) }
+    var showAdultPinVerifyForChangeDialog by remember { mutableStateOf(false) }
+    var showAdultPinChangeDialog by remember { mutableStateOf(false) }
     var showHiddenCategoriesDialog by remember { mutableStateOf(false) }
 
     val notificationPermLauncher = rememberLauncherForActivityResult(
@@ -264,6 +275,104 @@ fun SettingsScreen(
                             text = "${strings.hiddenCategories} (${settings.hiddenCategories.size})",
                             color = NabdCyan
                         )
+                    }
+                }
+            }
+        }
+
+        // Adult Content Lock (PIN 5555) & Permanent Delete
+        item {
+            val isDeleted = settings.adultDeletePermanently
+            val isLocked = settings.adultLockEnabled
+            val statusSubtitle = when {
+                isDeleted -> strings.adultLockSubtitleDeleted
+                isLocked -> strings.adultLockSubtitleLocked
+                else -> strings.adultLockSubtitleUnlocked
+            }
+            Surface(
+                color = NabdSurface,
+                shape = RoundedCornerShape(20.dp),
+                border = BorderStroke(1.dp, NabdBorder),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isLocked || isDeleted) Icons.Default.Lock else Icons.Default.LockOpen,
+                            contentDescription = null,
+                            tint = if (isLocked || isDeleted) NabdCyan else NabdPink
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(strings.adultLockTitle, style = MaterialTheme.typography.titleSmall, color = Color.White)
+                            Text(statusSubtitle, style = MaterialTheme.typography.bodySmall, color = NabdTextSecondary)
+                        }
+                    }
+
+                    if (!isDeleted) {
+                        Button(
+                            onClick = {
+                                if (isLocked) {
+                                    showAdultUnlockPinDialog = true
+                                } else {
+                                    onAdultLockToggle(true)
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isLocked) NabdViolet else NabdPink
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("adult_lock_toggle_button")
+                        ) {
+                            Text(
+                                text = if (isLocked) strings.adultLockUnlockAction else strings.adultLockRelockAction,
+                                color = Color.White
+                            )
+                        }
+                    }
+
+                    SettingsSwitchRow(
+                        label = strings.adultDeletePermanentlyToggle,
+                        checked = isDeleted,
+                        onCheckedChange = { enable ->
+                            if (enable) {
+                                onAdultDeletePermanentlyToggle(true)
+                                Toast.makeText(context, strings.adultPurgedToast, Toast.LENGTH_SHORT).show()
+                            } else {
+                                showAdultDisableDeletePinDialog = true
+                            }
+                        }
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                onPurgeAdultNow()
+                                Toast.makeText(context, strings.adultPurgedToast, Toast.LENGTH_SHORT).show()
+                            },
+                            border = BorderStroke(1.dp, NabdPink.copy(alpha = 0.6f)),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("adult_purge_now_button")
+                        ) {
+                            Icon(Icons.Default.DeleteForever, contentDescription = null, tint = NabdPink, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text(strings.adultPurgeNowButton, color = NabdPink, maxLines = 1)
+                        }
+                        OutlinedButton(
+                            onClick = { showAdultPinVerifyForChangeDialog = true },
+                            border = BorderStroke(1.dp, NabdBorder),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(strings.changeAdultPin, color = NabdCyan, maxLines = 1)
+                        }
                     }
                 }
             }
@@ -448,6 +557,56 @@ fun SettingsScreen(
             onConfirmed = {
                 onKidsLockToggle(false, null)
                 showKidsPinVerifyDialog = false
+            }
+        )
+    }
+
+    if (showAdultUnlockPinDialog) {
+        PinEntryDialog(
+            title = strings.adultLockPinTitle,
+            expectedPin = settings.adultPin,
+            onDismiss = { showAdultUnlockPinDialog = false },
+            onConfirmed = {
+                onAdultLockToggle(false)
+                showAdultUnlockPinDialog = false
+            }
+        )
+    }
+
+    if (showAdultDisableDeletePinDialog) {
+        PinEntryDialog(
+            title = strings.adultLockPinTitle,
+            expectedPin = settings.adultPin,
+            onDismiss = { showAdultDisableDeletePinDialog = false },
+            onConfirmed = {
+                onAdultDeletePermanentlyToggle(false)
+                showAdultDisableDeletePinDialog = false
+            }
+        )
+    }
+
+    if (showAdultPinVerifyForChangeDialog) {
+        PinEntryDialog(
+            title = strings.adultLockPinTitle,
+            expectedPin = settings.adultPin,
+            onDismiss = { showAdultPinVerifyForChangeDialog = false },
+            onConfirmed = {
+                showAdultPinVerifyForChangeDialog = false
+                showAdultPinChangeDialog = true
+            }
+        )
+    }
+
+    if (showAdultPinChangeDialog) {
+        PinEntryDialog(
+            title = strings.changeAdultPin,
+            expectedPin = null,
+            onDismiss = { showAdultPinChangeDialog = false },
+            onConfirmed = { newPin ->
+                if (newPin.length >= 4) {
+                    onChangeAdultPin(newPin)
+                    showAdultPinChangeDialog = false
+                }
             }
         )
     }

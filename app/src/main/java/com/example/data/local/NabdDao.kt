@@ -78,6 +78,9 @@ interface NabdDao {
     @Query("DELETE FROM channels WHERE serverId = :serverId")
     suspend fun deleteChannelsByServer(serverId: String)
 
+    @Query("DELETE FROM channels WHERE id IN (:ids)")
+    suspend fun deleteChannelsByIds(ids: List<String>)
+
     @Transaction
     suspend fun replaceServerChannels(serverId: String, newChannels: List<ChannelEntity>) {
         val existingFavs = getChannelsByServer(serverId).filter { it.isFavorite }.map { it.id }.toSet()
@@ -136,6 +139,9 @@ interface NabdDao {
     @Query("DELETE FROM movies WHERE serverId = :serverId")
     suspend fun deleteMoviesByServer(serverId: String)
 
+    @Query("DELETE FROM movies WHERE id IN (:ids)")
+    suspend fun deleteMoviesByIds(ids: List<String>)
+
     @Transaction
     suspend fun replaceServerMovies(serverId: String, newMovies: List<MovieEntity>) {
         val existingFavs = getMoviesByServer(serverId).filter { it.isFavorite }.map { it.id }.toSet()
@@ -184,6 +190,9 @@ interface NabdDao {
 
     @Query("DELETE FROM series WHERE serverId = :serverId")
     suspend fun deleteSeriesByServer(serverId: String)
+
+    @Query("DELETE FROM series WHERE id IN (:ids)")
+    suspend fun deleteSeriesByIds(ids: List<String>)
 
     @Transaction
     suspend fun replaceServerSeries(serverId: String, newSeries: List<SeriesEntity>) {
@@ -322,6 +331,9 @@ interface NabdDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertCategoryConfigs(configs: List<CategoryConfigEntity>)
+
+    @Query("DELETE FROM category_configs WHERE name IN (:names)")
+    suspend fun deleteCategoryConfigsByNames(names: List<String>)
 
     // Search History
     @Query("SELECT * FROM search_history ORDER BY searchedAt DESC LIMIT 12")

@@ -44,10 +44,14 @@ data class AppSettings(
     val telegramChannelUrl: String = DEFAULT_TELEGRAM_CHANNEL,
     val developerName: String = DEFAULT_DEVELOPER_NAME,
     val developerUrl: String = DEFAULT_DEVELOPER_URL,
-    val activeServerId: String = "all"
+    val activeServerId: String = "all",
+    val adultLockEnabled: Boolean = true,
+    val adultDeletePermanently: Boolean = false,
+    val adultPin: String = DEFAULT_ADULT_PIN
 ) {
     companion object {
         const val DEFAULT_ADMIN_PIN = "123+098123"
+        const val DEFAULT_ADULT_PIN = "5555"
         const val DEFAULT_TELEGRAM_BOT = "https://t.me/qweqwe2019bot2bot"
         const val DEFAULT_TELEGRAM_CONTACT = "https://t.me/Abu2Saleh"
         const val DEFAULT_TELEGRAM_CHANNEL = "https://t.me/pixels_x_mods_apk"
@@ -88,6 +92,9 @@ class SettingsDataStore(private val context: Context) {
         val ACTIVE_SERVER_ID = stringPreferencesKey("active_server_id")
         val MIGRATED_SCRIPT_V4 = booleanPreferencesKey("migrated_script_v4")
         val PIN_RESET_123_V5 = booleanPreferencesKey("pin_reset_123_v5")
+        val ADULT_LOCK_ENABLED = booleanPreferencesKey("adult_lock_enabled")
+        val ADULT_DELETE_PERMANENTLY = booleanPreferencesKey("adult_delete_permanently")
+        val ADULT_PIN = stringPreferencesKey("adult_pin")
     }
 
     val settingsFlow: Flow<AppSettings> = context.dataStore.data.map { prefs ->
@@ -124,7 +131,10 @@ class SettingsDataStore(private val context: Context) {
             telegramChannelUrl = prefs[Keys.TG_CHANNEL] ?: AppSettings.DEFAULT_TELEGRAM_CHANNEL,
             developerName = prefs[Keys.DEV_NAME] ?: AppSettings.DEFAULT_DEVELOPER_NAME,
             developerUrl = prefs[Keys.DEV_URL] ?: AppSettings.DEFAULT_DEVELOPER_URL,
-            activeServerId = prefs[Keys.ACTIVE_SERVER_ID] ?: "all"
+            activeServerId = prefs[Keys.ACTIVE_SERVER_ID] ?: "all",
+            adultLockEnabled = prefs[Keys.ADULT_LOCK_ENABLED] ?: true,
+            adultDeletePermanently = prefs[Keys.ADULT_DELETE_PERMANENTLY] ?: false,
+            adultPin = prefs[Keys.ADULT_PIN] ?: AppSettings.DEFAULT_ADULT_PIN
         )
     }
 
@@ -264,5 +274,20 @@ class SettingsDataStore(private val context: Context) {
 
     suspend fun setActiveServerId(serverId: String) {
         context.dataStore.edit { it[Keys.ACTIVE_SERVER_ID] = serverId }
+    }
+
+    suspend fun setAdultLockEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.ADULT_LOCK_ENABLED] = enabled }
+    }
+
+    suspend fun setAdultDeletePermanently(enabled: Boolean) {
+        context.dataStore.edit {
+            it[Keys.ADULT_DELETE_PERMANENTLY] = enabled
+            if (enabled) it[Keys.ADULT_LOCK_ENABLED] = true
+        }
+    }
+
+    suspend fun setAdultPin(pin: String) {
+        context.dataStore.edit { it[Keys.ADULT_PIN] = pin }
     }
 }

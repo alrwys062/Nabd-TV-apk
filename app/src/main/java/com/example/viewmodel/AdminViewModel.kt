@@ -372,6 +372,16 @@ class AdminViewModel(private val repository: NabdRepository) : ViewModel() {
         }
     }
 
+    fun purgeAdultContent() {
+        viewModelScope.launch {
+            _isBusy.value = true
+            repository.settingsStore.setAdultDeletePermanently(true)
+            val removed = repository.purgeAdultContentFromDatabase()
+            _statusToast.value = "تم حذف $removed عنصر إباحي ومنع استيراده من السيرفر"
+            _isBusy.value = false
+        }
+    }
+
     class Factory(private val app: NabdApplication) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {

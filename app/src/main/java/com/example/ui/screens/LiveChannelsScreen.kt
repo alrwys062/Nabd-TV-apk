@@ -32,6 +32,8 @@ import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.HealthAndSafety
 import androidx.compose.material.icons.filled.LiveTv
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.DropdownMenu
@@ -87,10 +89,12 @@ fun LiveChannelsScreen(
     filter: LiveFilterState,
     isArabic: Boolean,
     isSyncing: Boolean,
+    isAdultLocked: Boolean = true,
     healthCheckProgress: Pair<Int, Int>?,
     onFilterChange: ((LiveFilterState) -> LiveFilterState) -> Unit,
     onToggleHideDead: (Boolean) -> Unit,
     onRunHealthCheck: () -> Unit,
+    onToggleAdultLock: () -> Unit = {},
     onRefresh: () -> Unit,
     onPlayChannel: (ChannelEntity) -> Unit,
     onFavoriteChannel: (ChannelEntity) -> Unit,
@@ -154,6 +158,16 @@ fun LiveChannelsScreen(
                         imageVector = Icons.Default.HealthAndSafety,
                         contentDescription = strings.checkHealth,
                         tint = if (healthCheckProgress != null) NabdEmerald else NabdTextSecondary
+                    )
+                }
+                IconButton(
+                    onClick = onToggleAdultLock,
+                    modifier = Modifier.testTag("live_adult_lock_button")
+                ) {
+                    Icon(
+                        imageVector = if (isAdultLocked) Icons.Default.Lock else Icons.Default.LockOpen,
+                        contentDescription = strings.adultLockTitle,
+                        tint = if (isAdultLocked) NabdPink else NabdEmerald
                     )
                 }
                 IconButton(

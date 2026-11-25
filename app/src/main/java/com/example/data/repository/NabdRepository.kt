@@ -19,6 +19,7 @@ import com.example.data.model.ServerSourceEntity
 import com.example.data.model.ServerType
 import com.example.data.model.StreamHealthStatus
 import com.example.data.model.WatchHistoryEntity
+import com.example.services.AdultContentFilter
 import com.example.services.ChannelHealthChecker
 import com.example.services.DownloadService
 import com.example.services.M3uParser
@@ -217,6 +218,7 @@ class NabdRepository(
         runCatching {
             when (server.type) {
                 ServerType.M3U -> {
+                    val deleteAdult = settingsStore.settingsFlow.first().adultDeletePermanently
                     val req = Request.Builder()
                         .url(server.url)
                         .header("User-Agent", "IPTVSmartersPlayer")
@@ -227,9 +229,14 @@ class NabdRepository(
                         val parseResult = InputStreamReader(body.byteStream(), Charsets.UTF_8).use { reader ->
                             M3uParser.parse(reader, server.id)
                         }
-                        if (parseResult.channels.isEmpty()) error("Empty M3U playlist")
-                        dao.replaceServerChannels(server.id, parseResult.channels)
-                        syncCategoriesFromChannels(parseResult.channels)
+                        val filteredChannels = if (deleteAdult) {
+                            parseResult.channels.filterNot { AdultContentFilter.isAdultChannel(it) }
+                        } else {
+                            parseResult.channels
+                        }
+                        if (filteredChannels.isEmpty()) error("Empty M3U playlist")
+                        dao.replaceServerChannels(server.id, filteredChannels)
+                        syncCategoriesFromChannels(filteredChannels)
                         val currentEpg = settingsStore.settingsFlow.first().epgUrl
                         if (currentEpg.isBlank() && !parseResult.detectedEpgUrl.isNullOrBlank()) {
                             settingsStore.setEpgUrl(parseResult.detectedEpgUrl)
@@ -237,7 +244,7 @@ class NabdRepository(
                         dao.upsertServer(
                             server.copy(lastSyncedAt = System.currentTimeMillis(), lastStatusOk = true)
                         )
-                        parseResult.channels.size
+                        filteredChannels.size
                     }
                 }
                 ServerType.JSON -> {
@@ -254,6 +261,7 @@ class NabdRepository(
                     }
                 }
                 ServerType.XTREAM -> {
+                    val deleteAdult = settingsStore.settingsFlow.first().adultDeletePermanently
                     val allowedCats = server.allowedCategoryIdsCsv
                         .split(",")
                         .map { it.trim() }
@@ -269,35 +277,54 @@ class NabdRepository(
                         password = server.xtreamPassword,
                         allowedCategoryIds = allowedCats,
                         snapshotCache = snapshotCache,
-                        onChannelsReady = { channels ->
-                            dao.replaceServerChannels(server.id, channels)
-                            syncCategoriesFromChannels(channels)
-                            channelsSaved = true
+                        onChannelsReady = { rawChannels ->
+                            val clean = if (deleteAdult) {
+                                rawChannels.filterNot { AdultContentFilter.isAdultChannel(it) }
+                            } else rawChannels
+                            if (clean.isNotEmpty()) {
+                                dao.replaceServerChannels(server.id, clean)
+                                syncCategoriesFromChannels(clean)
+                                channelsSaved = true
+                            }
                         },
-                        onMoviesReady = { movies ->
-                            dao.replaceServerMovies(server.id, movies)
-                            moviesSaved = true
+                        onMoviesReady = { rawMovies ->
+                            val clean = if (deleteAdult) {
+                                rawMovies.filterNot { AdultContentFilter.isAdultMovie(it) }
+                            } else rawMovies
+                            if (clean.isNotEmpty()) {
+                                dao.replaceServerMovies(server.id, clean)
+                                moviesSaved = true
+                            }
                         },
-                        onSeriesReady = { series ->
-                            dao.replaceServerSeries(server.id, series)
-                            seriesSaved = true
+                        onSeriesReady = { rawSeries ->
+                            val clean = if (deleteAdult) {
+                                rawSeries.filterNot { AdultContentFilter.isAdultSeries(it) }
+                            } else rawSeries
+                            if (clean.isNotEmpty()) {
+                                dao.replaceServerSeries(server.id, clean)
+                                seriesSaved = true
+                            }
                         }
                     )
-                    if (!channelsSaved && result.channels.isNotEmpty()) {
-                        dao.replaceServerChannels(server.id, result.channels)
-                        syncCategoriesFromChannels(result.channels)
+                    val cleanChannels = if (deleteAdult) result.channels.filterNot { AdultContentFilter.isAdultChannel(it) } else result.channels
+                    val cleanMovies = if (deleteAdult) result.movies.filterNot { AdultContentFilter.isAdultMovie(it) } else result.movies
+                    val cleanSeries = if (deleteAdult) result.series.filterNot { AdultContentFilter.isAdultSeries(it) } else result.series
+
+                    if (!channelsSaved && cleanChannels.isNotEmpty()) {
+                        dao.replaceServerChannels(server.id, cleanChannels)
+                        syncCategoriesFromChannels(cleanChannels)
                     }
-                    if (!moviesSaved && result.movies.isNotEmpty()) {
-                        dao.replaceServerMovies(server.id, result.movies)
+                    if (!moviesSaved && cleanMovies.isNotEmpty()) {
+                        dao.replaceServerMovies(server.id, cleanMovies)
                     }
-                    if (!seriesSaved && result.series.isNotEmpty()) {
-                        dao.replaceServerSeries(server.id, result.series)
+                    if (!seriesSaved && cleanSeries.isNotEmpty()) {
+                        dao.replaceServerSeries(server.id, cleanSeries)
                     }
                     if (result.episodes.isNotEmpty()) dao.insertEpisodes(result.episodes)
                     dao.upsertServer(
                         server.copy(lastSyncedAt = System.currentTimeMillis(), lastStatusOk = true)
                     )
-                    result.channels.size + result.movies.size + result.series.size
+                    cleanChannels.size + cleanMovies.size + cleanSeries.size
                 }
             }
         }.onFailure {
@@ -609,6 +636,31 @@ class NabdRepository(
         raw.lowercase()
             .replace(Regex("\\b(hd|fhd|uhd|sd|4k|h265|hevc|vip|raw|ar)\\b"), "")
             .replace(Regex("[^\\p{L}\\p{N}]"), "")
+
+    suspend fun purgeAdultContentFromDatabase(): Int = withContext(Dispatchers.IO) {
+        val adultChannelIds = dao.observeAllChannels().first()
+            .filter { AdultContentFilter.isAdultChannel(it) }
+            .map { it.id }
+        val adultMovieIds = dao.getAllMoviesOnce()
+            .filter { AdultContentFilter.isAdultMovie(it) }
+            .map { it.id }
+        val adultSeriesIds = dao.getAllSeriesOnce()
+            .filter { AdultContentFilter.isAdultSeries(it) }
+            .map { it.id }
+        val adultCategoryNames = dao.getCategoryConfigsOnce()
+            .filter { AdultContentFilter.isAdultCategory(it.name) }
+            .map { it.name }
+
+        adultChannelIds.chunked(500).forEach { dao.deleteChannelsByIds(it) }
+        adultMovieIds.chunked(500).forEach { dao.deleteMoviesByIds(it) }
+        adultSeriesIds.chunked(500).forEach {
+            it.forEach { sid -> dao.deleteEpisodesBySeries(sid) }
+            dao.deleteSeriesByIds(it)
+        }
+        adultCategoryNames.chunked(500).forEach { dao.deleteCategoryConfigsByNames(it) }
+
+        adultChannelIds.size + adultMovieIds.size + adultSeriesIds.size
+    }
 
     suspend fun clearCache() = withContext(Dispatchers.IO) {
         dao.clearEpg()

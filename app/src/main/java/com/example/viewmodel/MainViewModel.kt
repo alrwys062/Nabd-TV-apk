@@ -23,6 +23,7 @@ import com.example.data.model.ServerSourceEntity
 import com.example.data.model.StreamHealthStatus
 import com.example.data.model.WatchHistoryEntity
 import com.example.data.repository.NabdRepository
+import com.example.services.AdultContentFilter
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -85,9 +86,11 @@ class MainViewModel(
         val invisible = configs.filter { !it.isVisible }.map { it.name }.toSet()
         val kidsHidden = if (prefs.kidsLockEnabled) prefs.hiddenCategories else emptySet()
         val blocked = invisible + kidsHidden
+        val hideAdult = prefs.adultLockEnabled || prefs.adultDeletePermanently
         channels.filter { ch ->
             (prefs.activeServerId == "all" || ch.serverId == prefs.activeServerId) &&
                 !blocked.contains(ch.category) &&
+                (!hideAdult || !AdultContentFilter.isAdultChannel(ch)) &&
                 (!prefs.hideDeadChannels || ch.healthStatus != StreamHealthStatus.OFFLINE)
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -147,14 +150,20 @@ class MainViewModel(
 
     val allMovies: StateFlow<List<MovieEntity>> = repository.allMoviesFlow
         .combine(settings) { movies, prefs ->
-            if (prefs.activeServerId == "all") movies
-            else movies.filter { it.serverId == prefs.activeServerId || it.serverId == "manual" }
+            val hideAdult = prefs.adultLockEnabled || prefs.adultDeletePermanently
+            movies.filter { mv ->
+                (prefs.activeServerId == "all" || mv.serverId == prefs.activeServerId || mv.serverId == "manual") &&
+                    (!hideAdult || !AdultContentFilter.isAdultMovie(mv))
+            }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val allSeries: StateFlow<List<SeriesEntity>> = repository.allSeriesFlow
         .combine(settings) { series, prefs ->
-            if (prefs.activeServerId == "all") series
-            else series.filter { it.serverId == prefs.activeServerId || it.serverId == "manual" }
+            val hideAdult = prefs.adultLockEnabled || prefs.adultDeletePermanently
+            series.filter { sr ->
+                (prefs.activeServerId == "all" || sr.serverId == prefs.activeServerId || sr.serverId == "manual") &&
+                    (!hideAdult || !AdultContentFilter.isAdultSeries(sr))
+            }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val favoriteChannels: StateFlow<List<ChannelEntity>> = repository.favoriteChannelsFlow
@@ -349,6 +358,30 @@ class MainViewModel(
 
     fun setAdminPin(newPin: String) = viewModelScope.launch {
         repository.settingsStore.setAdminPin(newPin)
+    }
+
+    fun setAdultLockEnabled(enabled: Boolean) = viewModelScope.launch {
+        repository.settingsStore.setAdultLockEnabled(enabled)
+    }
+
+    fun setAdultDeletePermanently(enabled: Boolean, onDone: (Int) -> Unit = {}) = viewModelScope.launch {
+        repository.settingsStore.setAdultDeletePermanently(enabled)
+        if (enabled) {
+            val removed = repository.purgeAdultContentFromDatabase()
+            onDone(removed)
+        } else {
+            onDone(0)
+        }
+    }
+
+    fun purgeAdultContentNow(onDone: (Int) -> Unit = {}) = viewModelScope.launch {
+        repository.settingsStore.setAdultDeletePermanently(true)
+        val removed = repository.purgeAdultContentFromDatabase()
+        onDone(removed)
+    }
+
+    fun setAdultPin(newPin: String) = viewModelScope.launch {
+        repository.settingsStore.setAdultPin(newPin)
     }
 
     fun clearCache() = viewModelScope.launch {
