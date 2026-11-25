@@ -140,17 +140,12 @@ class AdminViewModel(private val repository: NabdRepository) : ViewModel() {
     fun testAndSyncServer(server: ServerSourceEntity) {
         viewModelScope.launch {
             _isBusy.value = true
-            val ok = repository.testServerConnection(server)
-            if (ok) {
-                val res = repository.syncSingleServer(server)
-                res.onSuccess { count ->
-                    _statusToast.value = "Connected! Synced $count items"
-                }.onFailure {
-                    _statusToast.value = "Connected, sync error: ${it.localizedMessage}"
-                }
-            } else {
+            val res = repository.syncSingleServer(server)
+            res.onSuccess { count ->
+                _statusToast.value = "تم الاتصال وجلب $count عنصر"
+            }.onFailure { err ->
                 repository.upsertServer(server.copy(lastStatusOk = false))
-                _statusToast.value = "Connection failed for ${server.name}"
+                _statusToast.value = err.localizedMessage ?: "فشل الاتصال بـ ${server.name}"
             }
             _isBusy.value = false
         }

@@ -47,7 +47,7 @@ data class AppSettings(
     val activeServerId: String = "all"
 ) {
     companion object {
-        const val DEFAULT_ADMIN_PIN = "123+098123"
+        const val DEFAULT_ADMIN_PIN = "124+098123"
         const val DEFAULT_TELEGRAM_BOT = "https://t.me/qweqwe2019bot2bot"
         const val DEFAULT_TELEGRAM_CONTACT = "https://t.me/Abu2Saleh"
         const val DEFAULT_TELEGRAM_CHANNEL = "https://t.me/pixels_x_mods_apk"
@@ -86,14 +86,19 @@ class SettingsDataStore(private val context: Context) {
         val DEV_NAME = stringPreferencesKey("dev_name")
         val DEV_URL = stringPreferencesKey("dev_url")
         val ACTIVE_SERVER_ID = stringPreferencesKey("active_server_id")
-        val MIGRATED_SCRIPT_V3 = booleanPreferencesKey("migrated_script_v3")
+        val MIGRATED_SCRIPT_V4 = booleanPreferencesKey("migrated_script_v4")
     }
 
     val settingsFlow: Flow<AppSettings> = context.dataStore.data.map { prefs ->
+        val isV4Migrated = prefs[Keys.MIGRATED_SCRIPT_V4] ?: false
         AppSettings(
             isFirstLaunch = prefs[Keys.FIRST_LAUNCH] ?: true,
             language = prefs[Keys.LANGUAGE] ?: "ar",
-            adminPin = prefs[Keys.ADMIN_PIN] ?: AppSettings.DEFAULT_ADMIN_PIN,
+            adminPin = if (isV4Migrated) {
+                prefs[Keys.ADMIN_PIN] ?: AppSettings.DEFAULT_ADMIN_PIN
+            } else {
+                AppSettings.DEFAULT_ADMIN_PIN
+            },
             kidsLockEnabled = prefs[Keys.KIDS_LOCK_ENABLED] ?: false,
             kidsLockPin = prefs[Keys.KIDS_LOCK_PIN] ?: "0000",
             hiddenCategories = prefs[Keys.HIDDEN_CATEGORIES] ?: emptySet(),
@@ -122,7 +127,7 @@ class SettingsDataStore(private val context: Context) {
     }
 
     suspend fun isScriptMigrated(): Boolean {
-        return context.dataStore.data.first()[Keys.MIGRATED_SCRIPT_V3] ?: false
+        return context.dataStore.data.first()[Keys.MIGRATED_SCRIPT_V4] ?: false
     }
 
     suspend fun markScriptMigratedAndResetDefaults() {
@@ -136,7 +141,7 @@ class SettingsDataStore(private val context: Context) {
             it[Keys.DEV_NAME] = AppSettings.DEFAULT_DEVELOPER_NAME
             it[Keys.DEV_URL] = AppSettings.DEFAULT_DEVELOPER_URL
             it[Keys.ACTIVE_SERVER_ID] = "all"
-            it[Keys.MIGRATED_SCRIPT_V3] = true
+            it[Keys.MIGRATED_SCRIPT_V4] = true
         }
     }
 

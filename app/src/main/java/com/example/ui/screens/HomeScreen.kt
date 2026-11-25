@@ -467,12 +467,15 @@ fun HomeScreen(
                     }
                 }
             } else if (!isSyncing) {
+                val isFilteredToSingleServer = settings.activeServerId != "all"
                 EmptyStateView(
                     icon = Icons.Default.LiveTv,
                     title = strings.emptyChannelsTitle,
                     subtitle = strings.emptyChannelsSubtitle,
-                    actionLabel = strings.retryLoad,
-                    onAction = onRefreshClick
+                    actionLabel = if (isFilteredToSingleServer) strings.allServersLabel else strings.retryLoad,
+                    onAction = {
+                        if (isFilteredToSingleServer) onSelectServer("all") else onRefreshClick()
+                    }
                 )
             }
         }

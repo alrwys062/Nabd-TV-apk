@@ -33,12 +33,16 @@ import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -61,6 +65,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.example.data.local.AppSettings
@@ -375,6 +381,7 @@ fun SettingsScreen(
 
     if (showAdminPinChangeDialog) {
         var newPin by remember { mutableStateOf("") }
+        var newPinVisible by remember { mutableStateOf(false) }
         AlertDialog(
             onDismissRequest = { showAdminPinChangeDialog = false },
             containerColor = NabdSurface,
@@ -385,15 +392,27 @@ fun SettingsScreen(
                     onValueChange = { if (it.length <= 32) newPin = it },
                     label = { Text(strings.enterPin) },
                     singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
+                    textStyle = LocalTextStyle.current.copy(textDirection = TextDirection.Ltr),
+                    visualTransformation = if (newPinVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    trailingIcon = {
+                        IconButton(onClick = { newPinVisible = !newPinVisible }) {
+                            Icon(
+                                imageVector = if (newPinVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = null,
+                                tint = NabdTextSecondary
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
                 )
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        if (newPin.length >= 4) {
-                            onChangeAdminPin(newPin)
+                        val trimmed = newPin.trim()
+                        if (trimmed.length >= 4) {
+                            onChangeAdminPin(trimmed)
                             showAdminPinChangeDialog = false
                         }
                     },

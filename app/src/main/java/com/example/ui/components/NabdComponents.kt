@@ -35,6 +35,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -48,11 +49,14 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Tv
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
@@ -80,9 +84,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -918,6 +925,17 @@ fun EmptyStateView(
     }
 }
 
+private fun normalizePinInput(raw: String): String =
+    buildString(raw.length) {
+        for (ch in raw.trim()) {
+            when (ch) {
+                in '٠'..'٩' -> append(('0'.code + (ch.code - '٠'.code)).toChar())
+                in '۰'..'۹' -> append(('0'.code + (ch.code - '۰'.code)).toChar())
+                else -> append(ch)
+            }
+        }
+    }
+
 @Composable
 fun PinEntryDialog(
     title: String,
@@ -927,7 +945,17 @@ fun PinEntryDialog(
 ) {
     val strings = LocalAppStrings.current
     var pin by remember { mutableStateOf("") }
+    var pinVisible by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf(false) }
+
+    val submitPin = {
+        val normalized = normalizePinInput(pin)
+        if (expectedPin == null || normalized == expectedPin.trim()) {
+            onConfirmed(normalized)
+        } else {
+            error = true
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -945,8 +973,22 @@ fun PinEntryDialog(
                     },
                     label = { Text(strings.enterPin) },
                     singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    textStyle = LocalTextStyle.current.copy(textDirection = TextDirection.Ltr),
+                    visualTransformation = if (pinVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Password,
+                        imeAction = ImeAction.Done
+                    ),
+                    keyboardActions = KeyboardActions(onDone = { submitPin() }),
+                    trailingIcon = {
+                        IconButton(onClick = { pinVisible = !pinVisible }) {
+                            Icon(
+                                imageVector = if (pinVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = null,
+                                tint = NabdTextSecondary
+                            )
+                        }
+                    },
                     isError = error,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -963,13 +1005,7 @@ fun PinEntryDialog(
         },
         confirmButton = {
             Button(
-                onClick = {
-                    if (expectedPin == null || pin == expectedPin) {
-                        onConfirmed(pin)
-                    } else {
-                        error = true
-                    }
-                },
+                onClick = submitPin,
                 colors = ButtonDefaults.buttonColors(containerColor = NabdViolet),
                 modifier = Modifier.testTag("pin_confirm_button")
             ) {

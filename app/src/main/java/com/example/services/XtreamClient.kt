@@ -1,5 +1,7 @@
 package com.example.services
 
+import android.util.JsonReader
+import android.util.JsonToken
 import com.example.data.model.ChannelEntity
 import com.example.data.model.EpisodeEntity
 import com.example.data.model.MovieEntity
@@ -18,20 +20,29 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.floatOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.longOrNull
 import okhttp3.Cookie
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.io.BufferedReader
 import java.io.StringReader
 import java.net.URLEncoder
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+
+data class XtreamRawLiveItem(
+    val streamId: String,
+    val categoryId: String,
+    val name: String,
+    val streamIcon: String,
+    val epgChannelId: String,
+    val directSource: String,
+    val containerExtension: String
+)
 
 data class XtreamSyncResult(
     val channels: List<ChannelEntity>,
@@ -42,7 +53,7 @@ data class XtreamSyncResult(
 
 data class XtreamLiveSnapshot(
     val liveCatMap: Map<String, String>,
-    val liveArr: JsonArray
+    val liveItems: List<XtreamRawLiveItem>
 )
 
 class XtreamClient(httpClient: OkHttpClient) {
@@ -96,33 +107,35 @@ class XtreamClient(httpClient: OkHttpClient) {
         password: String,
         allowedCategoryIds: List<String> = emptyList(),
         skipVodAndSeries: Boolean = allowedCategoryIds.isNotEmpty(),
-        snapshotCache: MutableMap<String, XtreamLiveSnapshot>? = null
+        snapshotCache: MutableMap<String, XtreamLiveSnapshot>? = null,
+        onChannelsReady: suspend (List<ChannelEntity>) -> Unit = {},
+        onMoviesReady: suspend (List<MovieEntity>) -> Unit = {},
+        onSeriesReady: suspend (List<SeriesEntity>) -> Unit = {}
     ): XtreamSyncResult = withContext(Dispatchers.IO) {
         val base = normalizeHost(host)
         val cacheKey = "$base|${username.trim()}|${password.trim()}"
 
-        // 1. Resolve live categories + live streams (reuse snapshot if same account already fetched)
+        // 1. Resolve live categories + live streams via streaming JsonReader (low RAM footprint)
         val cachedSnapshot = snapshotCache?.get(cacheKey)
         val liveCatMap: Map<String, String>
-        val liveArr: JsonArray?
+        val liveItems: List<XtreamRawLiveItem>?
         var m3uFallbackChannels: List<ChannelEntity>? = null
 
         if (cachedSnapshot != null) {
             liveCatMap = cachedSnapshot.liveCatMap
-            liveArr = cachedSnapshot.liveArr
+            liveItems = cachedSnapshot.liveItems
         } else {
             val fetchedCats = fetchCategories(base, username, password, "get_live_categories")
             liveCatMap = dhsScriptCategoryDefaults + fetchedCats
 
-            var fetchedLive = fetchLiveRaw(base, username, password)
+            var fetchedLive = fetchLiveRawStreaming(base, username, password)
             if (fetchedLive == null && allowedCategoryIds.isNotEmpty()) {
-                // Fallback matching dhs.html: fetch per category_id in small batches
-                fetchedLive = fetchLiveByCategories(base, username, password, allowedCategoryIds)
+                fetchedLive = fetchLiveByCategoriesStreaming(base, username, password, allowedCategoryIds)
             }
-            liveArr = fetchedLive
+            liveItems = fetchedLive
 
-            if (liveArr != null) {
-                snapshotCache?.put(cacheKey, XtreamLiveSnapshot(liveCatMap, liveArr))
+            if (liveItems != null && liveItems.isNotEmpty()) {
+                snapshotCache?.put(cacheKey, XtreamLiveSnapshot(liveCatMap, liveItems))
             } else {
                 // Last-resort fallback: M3U get.php endpoint
                 val m3uUrl = "$base/get.php?username=${encodePart(username)}&password=${encodePart(password)}&type=m3u_plus&output=ts"
@@ -145,22 +158,36 @@ class XtreamClient(httpClient: OkHttpClient) {
         }
 
         val channels = when {
-            liveArr != null -> buildChannels(serverId, base, username, password, liveCatMap, liveArr, allowedCategoryIds)
+            liveItems != null -> buildChannels(serverId, base, username, password, liveCatMap, liveItems, allowedCategoryIds)
             m3uFallbackChannels != null -> m3uFallbackChannels
             else -> emptyList()
         }
 
-        // 2. Fetch VOD & Series sequentially (after live) to avoid overwhelming Xtream panels with 6 concurrent requests
+        if (channels.isNotEmpty()) {
+            onChannelsReady(channels)
+        }
+
+        // 2. Fetch VOD & Series sequentially in isolated blocks so neither blocks Live Channels
         var movies: List<MovieEntity> = emptyList()
         var series: List<SeriesEntity> = emptyList()
         if (!skipVodAndSeries) {
-            val vodCatMap = fetchCategories(base, username, password, "get_vod_categories")
-            val vodArr = fetchVodRaw(base, username, password)
-            movies = buildMovies(serverId, base, username, password, vodCatMap, vodArr)
+            movies = runCatching {
+                val vodCatMap = fetchCategories(base, username, password, "get_vod_categories")
+                fetchVodStreaming(serverId, base, username, password, vodCatMap, maxItems = 1500).orEmpty()
+            }.getOrDefault(emptyList())
 
-            val seriesCatMap = fetchCategories(base, username, password, "get_series_categories")
-            val seriesArr = fetchSeriesRaw(base, username, password)
-            series = buildSeries(serverId, seriesCatMap, seriesArr)
+            if (movies.isNotEmpty()) {
+                onMoviesReady(movies)
+            }
+
+            series = runCatching {
+                val seriesCatMap = fetchCategories(base, username, password, "get_series_categories")
+                fetchSeriesStreaming(serverId, base, username, password, seriesCatMap, maxItems = 600).orEmpty()
+            }.getOrDefault(emptyList())
+
+            if (series.isNotEmpty()) {
+                onSeriesReady(series)
+            }
         }
 
         if (channels.isEmpty() && movies.isEmpty() && series.isEmpty()) {
@@ -250,59 +277,249 @@ class XtreamClient(httpClient: OkHttpClient) {
         action: String
     ): Map<String, String> {
         val url = "$base/player_api.php?username=${encodePart(user)}&password=${encodePart(pass)}&action=$action"
-        val body = getStringOrNull(url) ?: return emptyMap()
-        val arr = runCatching { json.parseToJsonElement(body) as? JsonArray }.getOrNull() ?: return emptyMap()
-        val map = LinkedHashMap<String, String>(arr.size)
-        arr.forEach { elem ->
-            val obj = elem as? JsonObject ?: return@forEach
-            val id = obj["category_id"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-            val name = obj["category_name"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-            if (id.isNotEmpty() && name.isNotEmpty()) {
-                map[id] = name
+        return streamJsonUrl(url) { reader ->
+            if (reader.peek() != JsonToken.BEGIN_ARRAY) return@streamJsonUrl null
+            val map = LinkedHashMap<String, String>()
+            reader.beginArray()
+            while (reader.hasNext()) {
+                if (reader.peek() != JsonToken.BEGIN_OBJECT) {
+                    reader.skipValue()
+                    continue
+                }
+                var id = ""
+                var name = ""
+                reader.beginObject()
+                while (reader.hasNext()) {
+                    when (reader.nextName()) {
+                        "category_id" -> id = readScalarString(reader)
+                        "category_name" -> name = readScalarString(reader)
+                        else -> reader.skipValue()
+                    }
+                }
+                reader.endObject()
+                if (id.isNotEmpty() && name.isNotEmpty()) {
+                    map[id] = name
+                }
             }
+            reader.endArray()
+            map
+        }.orEmpty()
+    }
+
+    private suspend fun fetchLiveRawStreaming(
+        base: String,
+        user: String,
+        pass: String,
+        categoryId: String? = null
+    ): List<XtreamRawLiveItem>? {
+        val catParam = if (!categoryId.isNullOrBlank()) "&category_id=${encodePart(categoryId)}" else ""
+        val url = "$base/player_api.php?username=${encodePart(user)}&password=${encodePart(pass)}&action=get_live_streams$catParam"
+        return streamJsonUrl(url) { reader ->
+            if (reader.peek() != JsonToken.BEGIN_ARRAY) return@streamJsonUrl null
+            val list = ArrayList<XtreamRawLiveItem>(256)
+            reader.beginArray()
+            while (reader.hasNext()) {
+                if (reader.peek() != JsonToken.BEGIN_OBJECT) {
+                    reader.skipValue()
+                    continue
+                }
+                var streamId = ""
+                var catId = ""
+                var name = ""
+                var icon = ""
+                var epgId = ""
+                var directSource = ""
+                var containerExt = ""
+
+                reader.beginObject()
+                while (reader.hasNext()) {
+                    when (reader.nextName()) {
+                        "stream_id" -> streamId = readScalarString(reader)
+                        "category_id" -> catId = readScalarString(reader)
+                        "name" -> name = readScalarString(reader)
+                        "stream_icon" -> icon = readScalarString(reader)
+                        "epg_channel_id" -> epgId = readScalarString(reader)
+                        "direct_source" -> directSource = readScalarString(reader)
+                        "container_extension" -> containerExt = readScalarString(reader)
+                        else -> reader.skipValue()
+                    }
+                }
+                reader.endObject()
+
+                if (streamId.isNotEmpty()) {
+                    list.add(
+                        XtreamRawLiveItem(
+                            streamId = streamId,
+                            categoryId = catId,
+                            name = name,
+                            streamIcon = icon,
+                            epgChannelId = epgId,
+                            directSource = directSource,
+                            containerExtension = containerExt
+                        )
+                    )
+                }
+            }
+            reader.endArray()
+            list
         }
-        return map
     }
 
-    private suspend fun fetchLiveRaw(base: String, user: String, pass: String): JsonArray? {
-        val url = "$base/player_api.php?username=${encodePart(user)}&password=${encodePart(pass)}&action=get_live_streams"
-        val body = getStringOrNull(url) ?: return null
-        return runCatching { json.parseToJsonElement(body) as? JsonArray }.getOrNull()
-    }
-
-    private suspend fun fetchLiveByCategories(
+    private suspend fun fetchLiveByCategoriesStreaming(
         base: String,
         user: String,
         pass: String,
         categoryIds: List<String>
-    ): JsonArray? = coroutineScope {
+    ): List<XtreamRawLiveItem>? = coroutineScope {
         val semaphore = Semaphore(3)
         val lists = categoryIds.map { catId ->
             async(Dispatchers.IO) {
                 semaphore.withPermit {
-                    val url = "$base/player_api.php?username=${encodePart(user)}&password=${encodePart(pass)}&action=get_live_streams&category_id=${encodePart(catId)}"
-                    val body = getStringOrNull(url) ?: return@withPermit emptyList()
-                    runCatching { json.parseToJsonElement(body) as? JsonArray }
-                        .getOrNull()
-                        ?.toList()
-                        .orEmpty()
+                    fetchLiveRawStreaming(base, user, pass, catId).orEmpty()
                 }
             }
         }.awaitAll().flatten()
 
-        if (lists.isEmpty()) null else JsonArray(lists)
+        lists.takeIf { it.isNotEmpty() }
     }
 
-    private suspend fun fetchVodRaw(base: String, user: String, pass: String): JsonArray? {
-        val url = "$base/player_api.php?username=${encodePart(user)}&password=${encodePart(pass)}&action=get_vod_streams"
-        val body = getStringOrNull(url) ?: return null
-        return runCatching { json.parseToJsonElement(body) as? JsonArray }.getOrNull()
+    private suspend fun fetchVodStreaming(
+        serverId: String,
+        base: String,
+        user: String,
+        pass: String,
+        categoryMap: Map<String, String>,
+        maxItems: Int
+    ): List<MovieEntity>? {
+        val encUser = encodePart(user)
+        val encPass = encodePart(pass)
+        val nowMs = System.currentTimeMillis()
+        val url = "$base/player_api.php?username=$encUser&password=$encPass&action=get_vod_streams"
+        return streamJsonUrl(url) { reader ->
+            if (reader.peek() != JsonToken.BEGIN_ARRAY) return@streamJsonUrl null
+            val list = ArrayList<MovieEntity>(256)
+            reader.beginArray()
+            while (reader.hasNext() && list.size < maxItems) {
+                if (reader.peek() != JsonToken.BEGIN_OBJECT) {
+                    reader.skipValue()
+                    continue
+                }
+                var streamId = ""
+                var name = ""
+                var ext = ""
+                var icon = ""
+                var catId = ""
+                var ratingStr = ""
+                var rating5Str = ""
+                var addedStr = ""
+
+                reader.beginObject()
+                while (reader.hasNext()) {
+                    when (reader.nextName()) {
+                        "stream_id" -> streamId = readScalarString(reader)
+                        "name" -> name = readScalarString(reader)
+                        "container_extension" -> ext = readScalarString(reader)
+                        "stream_icon" -> icon = readScalarString(reader)
+                        "category_id" -> catId = readScalarString(reader)
+                        "rating" -> ratingStr = readScalarString(reader)
+                        "rating_5based" -> rating5Str = readScalarString(reader)
+                        "added" -> addedStr = readScalarString(reader)
+                        else -> reader.skipValue()
+                    }
+                }
+                reader.endObject()
+
+                if (streamId.isNotEmpty()) {
+                    val safeName = name.ifBlank { "Movie $streamId" }
+                    val safeExt = ext.ifBlank { "mp4" }.trimStart('.').ifBlank { "mp4" }
+                    val catName = categoryMap[catId]?.takeIf { it.isNotBlank() } ?: "Movies"
+                    val rawRating = ratingStr.toFloatOrNull()
+                        ?: rating5Str.toFloatOrNull()?.times(2f)
+                        ?: 7.5f
+                    val addedSec = addedStr.toLongOrNull()
+                    val addedMs = if (addedSec != null && addedSec > 0L) addedSec * 1000L else nowMs
+                    list.add(
+                        MovieEntity(
+                            id = "${serverId}_vod_$streamId",
+                            title = safeName,
+                            posterUrl = icon,
+                            backdropUrl = icon,
+                            rating = rawRating.coerceIn(0f, 10f),
+                            category = catName,
+                            streamUrl = "$base/movie/$encUser/$encPass/$streamId.$safeExt",
+                            serverId = serverId,
+                            addedAt = addedMs
+                        )
+                    )
+                }
+            }
+            list
+        }
     }
 
-    private suspend fun fetchSeriesRaw(base: String, user: String, pass: String): JsonArray? {
+    private suspend fun fetchSeriesStreaming(
+        serverId: String,
+        base: String,
+        user: String,
+        pass: String,
+        categoryMap: Map<String, String>,
+        maxItems: Int
+    ): List<SeriesEntity>? {
         val url = "$base/player_api.php?username=${encodePart(user)}&password=${encodePart(pass)}&action=get_series"
-        val body = getStringOrNull(url) ?: return null
-        return runCatching { json.parseToJsonElement(body) as? JsonArray }.getOrNull()
+        return streamJsonUrl(url) { reader ->
+            if (reader.peek() != JsonToken.BEGIN_ARRAY) return@streamJsonUrl null
+            val list = ArrayList<SeriesEntity>(128)
+            reader.beginArray()
+            while (reader.hasNext() && list.size < maxItems) {
+                if (reader.peek() != JsonToken.BEGIN_OBJECT) {
+                    reader.skipValue()
+                    continue
+                }
+                var sid = ""
+                var name = ""
+                var cover = ""
+                var plot = ""
+                var catId = ""
+                var ratingStr = ""
+                var rating5Str = ""
+
+                reader.beginObject()
+                while (reader.hasNext()) {
+                    when (reader.nextName()) {
+                        "series_id" -> sid = readScalarString(reader)
+                        "name" -> name = readScalarString(reader)
+                        "cover" -> cover = readScalarString(reader)
+                        "plot" -> plot = readScalarString(reader)
+                        "category_id" -> catId = readScalarString(reader)
+                        "rating" -> ratingStr = readScalarString(reader)
+                        "rating_5based" -> rating5Str = readScalarString(reader)
+                        else -> reader.skipValue()
+                    }
+                }
+                reader.endObject()
+
+                if (sid.isNotEmpty()) {
+                    val safeName = name.ifBlank { "Series $sid" }
+                    val catName = categoryMap[catId]?.takeIf { it.isNotBlank() } ?: "Series"
+                    val rawRating = ratingStr.toFloatOrNull()
+                        ?: rating5Str.toFloatOrNull()?.times(2f)
+                        ?: 8.0f
+                    list.add(
+                        SeriesEntity(
+                            id = "${serverId}_series_$sid",
+                            title = safeName,
+                            posterUrl = cover,
+                            backdropUrl = cover,
+                            description = plot,
+                            rating = rawRating.coerceIn(0f, 10f),
+                            category = catName,
+                            serverId = serverId
+                        )
+                    )
+                }
+            }
+            list
+        }
     }
 
     private fun buildChannels(
@@ -311,32 +528,26 @@ class XtreamClient(httpClient: OkHttpClient) {
         user: String,
         pass: String,
         categoryMap: Map<String, String>,
-        arr: JsonArray?,
+        items: List<XtreamRawLiveItem>,
         allowedCategoryIds: List<String>
     ): List<ChannelEntity> {
-        if (arr == null) return emptyList()
         val encUser = encodePart(user)
         val encPass = encodePart(pass)
         val allowSet = allowedCategoryIds.toSet()
         val orderLookup = allowedCategoryIds.withIndex().associate { it.value to it.index }
 
-        val parsed = arr.mapIndexedNotNull { idx, elem ->
-            val obj = elem as? JsonObject ?: return@mapIndexedNotNull null
-            val streamId = obj["stream_id"]?.jsonPrimitive?.contentOrNull?.trim() ?: return@mapIndexedNotNull null
-            val catId = obj["category_id"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-            if (allowSet.isNotEmpty() && !allowSet.contains(catId)) {
+        val parsed = items.mapIndexedNotNull { idx, item ->
+            if (allowSet.isNotEmpty() && !allowSet.contains(item.categoryId)) {
                 return@mapIndexedNotNull null
             }
 
-            val name = obj["name"]?.jsonPrimitive?.contentOrNull?.trim()?.ifBlank { "Live $streamId" }
-                ?: "Live $streamId"
-            val icon = obj["stream_icon"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-            val epgId = obj["epg_channel_id"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+            val streamId = item.streamId
+            val catId = item.categoryId
+            val name = item.name.ifBlank { "Live $streamId" }
             val catName = categoryMap[catId]?.takeIf { it.isNotBlank() }
                 ?: if (catId.isNotBlank()) "قسم $catId" else "General"
 
-            val directSource = obj["direct_source"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-            val rawExt = obj["container_extension"]?.jsonPrimitive?.contentOrNull?.trim()?.trimStart('.')?.takeIf { it.isNotBlank() } ?: "ts"
+            val rawExt = item.containerExtension.trimStart('.').ifBlank { "ts" }
             val m3u8Url = "$base/live/$encUser/$encPass/$streamId.m3u8"
             val tsUrl = "$base/live/$encUser/$encPass/$streamId.$rawExt"
             val legacyUrl = "$base/$encUser/$encPass/$streamId"
@@ -349,13 +560,13 @@ class XtreamClient(httpClient: OkHttpClient) {
                     add(PlayableSource(label = "Server 2 - TS", url = tsUrl, quality = "TS"))
                 }
                 add(PlayableSource(label = "Server 3 - Direct", url = legacyUrl, quality = "Auto"))
-                if (directSource.isNotBlank() &&
-                    directSource != primaryUrl &&
-                    directSource != m3u8Url &&
-                    directSource != tsUrl &&
-                    directSource != legacyUrl
+                if (item.directSource.isNotBlank() &&
+                    item.directSource != primaryUrl &&
+                    item.directSource != m3u8Url &&
+                    item.directSource != tsUrl &&
+                    item.directSource != legacyUrl
                 ) {
-                    add(PlayableSource(label = "Direct Source", url = directSource, quality = "Auto"))
+                    add(PlayableSource(label = "Direct Source", url = item.directSource, quality = "Auto"))
                 }
             }
             val backupsJson = json.encodeToString(backupSources)
@@ -364,13 +575,13 @@ class XtreamClient(httpClient: OkHttpClient) {
             ChannelEntity(
                 id = "${serverId}_live_$streamId",
                 name = name,
-                logoUrl = icon,
+                logoUrl = item.streamIcon,
                 streamUrl = primaryUrl,
                 backupUrlsJson = backupsJson,
                 category = catName,
                 country = "AR",
                 language = "Arabic",
-                tvgId = epgId,
+                tvgId = item.epgChannelId,
                 serverId = serverId,
                 sortOrder = catOrder + idx
             )
@@ -378,77 +589,47 @@ class XtreamClient(httpClient: OkHttpClient) {
         return if (allowSet.isNotEmpty()) parsed.sortedBy { it.sortOrder } else parsed
     }
 
-    private fun buildMovies(
-        serverId: String,
-        base: String,
-        user: String,
-        pass: String,
-        categoryMap: Map<String, String>,
-        arr: JsonArray?
-    ): List<MovieEntity> {
-        if (arr == null) return emptyList()
-        val encUser = encodePart(user)
-        val encPass = encodePart(pass)
-        return arr.take(1500).mapNotNull { elem ->
-            val obj = elem as? JsonObject ?: return@mapNotNull null
-            val streamId = obj["stream_id"]?.jsonPrimitive?.contentOrNull?.trim() ?: return@mapNotNull null
-            val name = obj["name"]?.jsonPrimitive?.contentOrNull?.trim()?.ifBlank { "Movie $streamId" }
-                ?: "Movie $streamId"
-            val ext = obj["container_extension"]?.jsonPrimitive?.contentOrNull?.trim()?.ifBlank { "mp4" } ?: "mp4"
-            val icon = obj["stream_icon"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-            val catId = obj["category_id"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-            val catName = categoryMap[catId]?.takeIf { it.isNotBlank() } ?: "Movies"
-            val rawRating = obj["rating"]?.jsonPrimitive?.floatOrNull
-                ?: obj["rating_5based"]?.jsonPrimitive?.floatOrNull?.times(2f)
-                ?: 7.5f
-            val addedSec = obj["added"]?.jsonPrimitive?.longOrNull
-            val addedMs = if (addedSec != null && addedSec > 0L) addedSec * 1000L else System.currentTimeMillis()
-            val movieUrl = "$base/movie/$encUser/$encPass/$streamId.$ext"
-
-            MovieEntity(
-                id = "${serverId}_vod_$streamId",
-                title = name,
-                posterUrl = icon,
-                backdropUrl = icon,
-                rating = rawRating.coerceIn(0f, 10f),
-                category = catName,
-                streamUrl = movieUrl,
-                serverId = serverId,
-                addedAt = addedMs
-            )
+    private fun readScalarString(reader: JsonReader): String {
+        return when (reader.peek()) {
+            JsonToken.STRING, JsonToken.NUMBER -> reader.nextString().trim()
+            JsonToken.BOOLEAN -> reader.nextBoolean().toString()
+            JsonToken.NULL -> {
+                reader.nextNull()
+                ""
+            }
+            else -> {
+                reader.skipValue()
+                ""
+            }
         }
     }
 
-    private fun buildSeries(
-        serverId: String,
-        categoryMap: Map<String, String>,
-        arr: JsonArray?
-    ): List<SeriesEntity> {
-        if (arr == null) return emptyList()
-        return arr.take(600).mapNotNull { elem ->
-            val obj = elem as? JsonObject ?: return@mapNotNull null
-            val sid = obj["series_id"]?.jsonPrimitive?.contentOrNull?.trim() ?: return@mapNotNull null
-            val name = obj["name"]?.jsonPrimitive?.contentOrNull?.trim()?.ifBlank { "Series $sid" }
-                ?: "Series $sid"
-            val cover = obj["cover"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-            val plot = obj["plot"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-            val catId = obj["category_id"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-            val catName = categoryMap[catId]?.takeIf { it.isNotBlank() } ?: "Series"
-            val rawRating = obj["rating"]?.jsonPrimitive?.floatOrNull
-                ?: obj["rating_5based"]?.jsonPrimitive?.floatOrNull?.times(2f)
-                ?: 8.0f
-
-            SeriesEntity(
-                id = "${serverId}_series_$sid",
-                title = name,
-                posterUrl = cover,
-                backdropUrl = cover,
-                description = plot,
-                rating = rawRating.coerceIn(0f, 10f),
-                category = catName,
-                serverId = serverId
-            )
+    private suspend fun <T> streamJsonUrl(url: String, parser: (JsonReader) -> T?): T? {
+        for ((idx, ua) in requestUserAgents.withIndex()) {
+            val req = Request.Builder()
+                .url(url)
+                .header("User-Agent", ua)
+                .header("Accept", "application/json, text/plain, */*")
+                .header("Connection", if (idx == 0) "keep-alive" else "close")
+                .build()
+            val parsed = runCatching {
+                xtreamHttp.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) return@use null
+                    val body = resp.body ?: return@use null
+                    JsonReader(BufferedReader(body.charStream(), 16 * 1024)).use { reader ->
+                        reader.isLenient = true
+                        parser(reader)
+                    }
+                }
+            }.getOrNull()
+            if (parsed != null) {
+                return parsed
+            }
+            if (idx + 1 < requestUserAgents.size) {
+                delay(250L)
+            }
         }
+        return null
     }
 
     private suspend fun getStringOrNull(url: String): String? {

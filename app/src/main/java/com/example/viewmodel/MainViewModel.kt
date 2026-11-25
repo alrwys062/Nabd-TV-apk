@@ -274,6 +274,7 @@ class MainViewModel(
 
     fun selectActiveServer(serverId: String) {
         viewModelScope.launch {
+            _syncMessage.value = null
             repository.settingsStore.setActiveServerId(serverId)
             _selectedHomeCategory.value = "All"
             _liveFilter.value = _liveFilter.value.copy(category = "All")
@@ -283,7 +284,6 @@ class MainViewModel(
                 val srv = servers.value.firstOrNull { it.id == serverId }
                 if (srv != null && (!hasChannels || !srv.lastStatusOk) && !_isSyncing.value) {
                     _isSyncing.value = true
-                    _syncMessage.value = null
                     val res = repository.syncSingleServer(srv)
                     res.onFailure {
                         _syncMessage.value = "تعذر الاتصال بـ ${srv.name} — قد يكون محجوباً أو متوقفاً من الشبكة الحالية"

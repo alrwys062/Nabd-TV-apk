@@ -194,17 +194,16 @@ class NabdRepository(
             }
         }
 
-        if (totalImported > 0 || currentCount > 0) {
-            if (failedServerNames.isEmpty()) {
-                settingsStore.setLastPlaylistRefresh(System.currentTimeMillis())
-            }
-            if (failedServerNames.isNotEmpty()) {
-                Result.failure(
-                    IllegalStateException("تعذر الاتصال بـ: ${failedServerNames.joinToString(" ، ")}")
-                )
-            } else {
-                Result.success(totalImported)
-            }
+        if (totalImported > 0) {
+            settingsStore.setLastPlaylistRefresh(System.currentTimeMillis())
+            Result.success(totalImported)
+        } else if (currentCount > 0 && failedServerNames.isEmpty()) {
+            settingsStore.setLastPlaylistRefresh(System.currentTimeMillis())
+            Result.success(currentCount)
+        } else if (failedServerNames.isNotEmpty()) {
+            Result.failure(
+                IllegalStateException("تعذر الاتصال بـ: ${failedServerNames.joinToString(" ، ")}")
+            )
         } else {
             Result.failure(lastError ?: IllegalStateException("تعذر الاتصال بالسيرفرات"))
         }
@@ -258,22 +257,39 @@ class NabdRepository(
                         .split(",")
                         .map { it.trim() }
                         .filter { it.isNotEmpty() }
+                    var channelsSaved = false
+                    var moviesSaved = false
+                    var seriesSaved = false
+
                     val result = xtreamClient.fetchCatalog(
                         serverId = server.id,
                         host = server.xtreamHost.ifBlank { server.url },
                         username = server.xtreamUsername,
                         password = server.xtreamPassword,
                         allowedCategoryIds = allowedCats,
-                        snapshotCache = snapshotCache
+                        snapshotCache = snapshotCache,
+                        onChannelsReady = { channels ->
+                            dao.replaceServerChannels(server.id, channels)
+                            syncCategoriesFromChannels(channels)
+                            channelsSaved = true
+                        },
+                        onMoviesReady = { movies ->
+                            dao.replaceServerMovies(server.id, movies)
+                            moviesSaved = true
+                        },
+                        onSeriesReady = { series ->
+                            dao.replaceServerSeries(server.id, series)
+                            seriesSaved = true
+                        }
                     )
-                    if (result.channels.isNotEmpty()) {
+                    if (!channelsSaved && result.channels.isNotEmpty()) {
                         dao.replaceServerChannels(server.id, result.channels)
                         syncCategoriesFromChannels(result.channels)
                     }
-                    if (result.movies.isNotEmpty()) {
+                    if (!moviesSaved && result.movies.isNotEmpty()) {
                         dao.replaceServerMovies(server.id, result.movies)
                     }
-                    if (result.series.isNotEmpty()) {
+                    if (!seriesSaved && result.series.isNotEmpty()) {
                         dao.replaceServerSeries(server.id, result.series)
                     }
                     if (result.episodes.isNotEmpty()) dao.insertEpisodes(result.episodes)
